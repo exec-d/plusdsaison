@@ -29,11 +29,15 @@ diffusées sur [meteo.data.gouv.fr](https://meteo.data.gouv.fr) sous
 ## `index/communes.bin` — référentiel communal
 
 Construit à partir de [geo.api.gouv.fr](https://geo.api.gouv.fr) (code officiel géographique et
-centroïdes, Licence Ouverte) et de l'API Elevation d'[Open-Meteo](https://open-meteo.com)
-(altitudes, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).
+centroïdes, Licence Ouverte) et du service altimétrique de la
+[Géoplateforme IGN](https://geoservices.ign.fr), qui expose le **RGE ALTI®** sous
+[Licence Ouverte 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/).
+
+> Contient des données de l'IGN — RGE ALTI®, sous Licence Ouverte 2.0.
 
 Modifications apportées : rattachement de chaque commune à sa maille ERA5-Land terrestre la plus
-proche, et calcul de la distance de rattachement.
+proche, et calcul de la distance de rattachement. Les communes hors de la couverture du RGE ALTI
+reçoivent l'orographie de leur maille ERA5-Land en guise d'altitude.
 
 ## `index/grid.bin` — orographie du modèle
 
