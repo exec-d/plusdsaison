@@ -1,13 +1,21 @@
 """Référentiel des communes françaises et de leur altitude.
 
-Les communes viennent de geo.api.gouv.fr, les altitudes de l'API Elevation
-d'Open-Meteo. Cette dernière accepte des requêtes groupées : 100 points par
-appel ramènent les 35 000 communes en 350 requêtes, exécutées une seule fois
-à la construction de l'index.
+Les communes viennent de geo.api.gouv.fr, les altitudes du service
+altimétrique de la Géoplateforme IGN, qui expose le RGE ALTI.
+
+Open-Meteo, initialement prévu, ne convient pas : son offre gratuite compte
+un appel *par point demandé* et non par requête. Les 35 000 communes pèsent
+donc 35 000 unités contre 10 000 autorisées par jour — aucun rythme ne les
+fait passer, et les essais se terminent invariablement en HTTP 429 puis 503.
+L'IGN n'a pas cette limite, accepte 150 points par requête, et donne pour la
+France des altitudes plus justes : 278,5 m à Villars-les-Dombes contre 279,0
+et 1 035,7 m à Chamonix contre 1 041,0.
 """
 
+import json
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -15,18 +23,20 @@ from scipy.spatial import cKDTree
 from .grid import cell_id as _cell_id
 
 GEO_API = "https://geo.api.gouv.fr/communes"
-ELEVATION_API = "https://api.open-meteo.com/v1/elevation"
-ELEVATION_BATCH = 100
+ELEVATION_API = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json"
+ELEVATION_RESOURCE = "ign_rge_alti_wld"
+ELEVATION_BATCH = 150
 
-# Open-Meteo limite le débit de son offre gratuite, et pondère ses appels
-# par le nombre de points demandés : 350 lots de 100 communes ne pèsent pas
-# 350 unités mais 35 000. Enchaîner les lots sans pause déclenche un HTTP 429
-# au bout de quelques dizaines d'appels, et 63 s de reprise n'y suffisent
-# pas. La fenêtre se recharge en revanche en quelques minutes, d'où ce
-# rythme volontairement lent : la construction de l'index est ponctuelle.
-ELEVATION_PAUSE_S = 1.5
-ELEVATION_RETRIES = 8
-ELEVATION_BACKOFF_MAX_S = 60.0
+# Valeur que rend l'IGN pour un point hors de sa couverture : en mer, et sur
+# quelques territoires ultramarins. À ne surtout pas confondre avec une
+# altitude, sous peine de placer des communes à 99 km sous le niveau de la mer.
+ELEVATION_NO_DATA = -99999.0
+
+# Le service reste courtois mais n'est pas sans limite : une courte pause
+# entre deux lots, et une reprise exponentielle en cas de refus.
+ELEVATION_PAUSE_S = 0.2
+ELEVATION_RETRIES = 6
+ELEVATION_BACKOFF_MAX_S = 30.0
 
 EARTH_RADIUS_KM = 6371.0
 MAX_DISTANCE_KM = 15.0
@@ -76,18 +86,16 @@ def fetch_communes(session) -> list[Commune]:
 def _get_avec_reprise(session, params: dict, pause) -> object:
     """Un appel Elevation, en réessayant tant qu'on est limité en débit."""
     for tentative in range(ELEVATION_RETRIES):
-        reponse = session.get(ELEVATION_API, params=params, timeout=60)
+        reponse = session.get(ELEVATION_API, params=params, timeout=120)
         # Les fausses sessions des tests ne portent pas de code HTTP :
         # les traiter comme des succès.
-        if getattr(reponse, "status_code", 200) != 429:
+        if getattr(reponse, "status_code", 200) not in (429, 503):
             reponse.raise_for_status()
             return reponse
-        # Attente plafonnée : au-delà d'une minute, insister plus longtemps
-        # ne sert à rien, la fenêtre s'est rechargée ou le quota est épuisé.
-        pause(min(5.0 * 2**tentative, ELEVATION_BACKOFF_MAX_S))
+        pause(min(2.0 * 2**tentative, ELEVATION_BACKOFF_MAX_S))
     raise RuntimeError(
-        f"Open-Meteo limite toujours le débit après {ELEVATION_RETRIES} tentatives ; "
-        "réduire ELEVATION_BATCH ou reprendre plus tard"
+        f"le service altimétrique refuse toujours après {ELEVATION_RETRIES} "
+        "tentatives ; réduire ELEVATION_BATCH ou reprendre plus tard"
     )
 
 
@@ -97,36 +105,68 @@ def fetch_elevations(
     batch: int = ELEVATION_BATCH,
     pause=time.sleep,
     progres=None,
+    cache: Path | None = None,
 ) -> None:
     """Renseigne `altitude` sur place, par lots groupés.
 
-    `progres` reçoit (communes traitées, total) après chaque lot : au rythme
-    imposé par Open-Meteo la boucle dure une dizaine de minutes, pendant
-    lesquelles un appelant muet est indiscernable d'un appelant bloqué.
+    `progres` reçoit (communes traitées, total) après chaque lot : la boucle
+    dure plusieurs minutes, pendant lesquelles un appelant muet est
+    indiscernable d'un appelant bloqué.
+
+    `cache` désigne un JSON où les altitudes déjà obtenues sont conservées,
+    ce qui rend l'opération reprenable : un incident réseau à la 200ᵉ requête
+    ne fait pas recommencer les 199 premières.
+
+    Les points hors couverture restent à `None` plutôt que de recevoir la
+    sentinelle du service : c'est à l'appelant de décider quoi en faire.
     """
-    for debut in range(0, len(communes), batch):
-        lot = communes[debut : debut + batch]
+    connues: dict[str, float] = {}
+    if cache is not None and Path(cache).exists():
+        connues = {
+            insee: float(z)
+            for insee, z in json.loads(Path(cache).read_text()).items()
+        }
+        for commune in communes:
+            if commune.insee in connues:
+                commune.altitude = connues[commune.insee]
+
+    restantes = [c for c in communes if c.altitude is None]
+    traitees = len(communes) - len(restantes)
+
+    for debut in range(0, len(restantes), batch):
+        lot = restantes[debut : debut + batch]
         if debut:
             pause(ELEVATION_PAUSE_S)
         reponse = _get_avec_reprise(
             session,
             {
-                "latitude": ",".join(f"{c.lat:.4f}" for c in lot),
-                "longitude": ",".join(f"{c.lon:.4f}" for c in lot),
+                # L'IGN sépare ses coordonnées par des barres verticales, et
+                # les attend dans l'ordre longitude puis latitude.
+                "lon": "|".join(f"{c.lon:.6f}" for c in lot),
+                "lat": "|".join(f"{c.lat:.6f}" for c in lot),
+                "resource": ELEVATION_RESOURCE,
+                "zonly": "true",
             },
             pause,
         )
-        altitudes = reponse.json()["elevation"]
+        altitudes = reponse.json()["elevations"]
 
         if len(altitudes) != len(lot):
             raise ValueError(
                 f"{len(altitudes)} altitudes reçues pour {len(lot)} communes demandées"
             )
         for commune, altitude in zip(lot, altitudes):
-            commune.altitude = float(altitude)
+            valeur = float(altitude)
+            if valeur == ELEVATION_NO_DATA:
+                continue
+            commune.altitude = valeur
+            connues[commune.insee] = valeur
 
+        traitees += len(lot)
+        if cache is not None:
+            Path(cache).write_text(json.dumps(connues))
         if progres is not None:
-            progres(min(debut + batch, len(communes)), len(communes))
+            progres(min(traitees, len(communes)), len(communes))
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

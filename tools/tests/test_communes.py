@@ -2,11 +2,14 @@
 l'index. Ces tests substituent les API HTTP : ils vérifient le parsing et
 le découpage en lots, pas la disponibilité des services."""
 
+import json
+
 import numpy as np
 import pytest
 
 from plusdsaison.communes import (
     ELEVATION_BACKOFF_MAX_S,
+    ELEVATION_NO_DATA,
     MAX_DISTANCE_KM,
     Commune,
     attach_to_land_cells,
@@ -76,17 +79,53 @@ def test_les_altitudes_sont_demandees_par_lots():
         for i in range(5)
     ]
     session = FausseSession([
-        {"elevation": [100.0, 200.0]},
-        {"elevation": [300.0, 400.0]},
-        {"elevation": [500.0]},
+        {"elevations": [100.0, 200.0]},
+        {"elevations": [300.0, 400.0]},
+        {"elevations": [500.0]},
     ])
 
     fetch_elevations(session, communes, batch=2, pause=lambda _: None)
 
     assert [c.altitude for c in communes] == [100.0, 200.0, 300.0, 400.0, 500.0]
     assert len(session.appels) == 3
-    # Les coordonnées partent groupées, séparées par des virgules.
-    assert session.appels[0][1]["latitude"].count(",") == 1
+    # L'IGN sépare ses coordonnées par des barres verticales.
+    assert session.appels[0][1]["lat"].count("|") == 1
+    assert session.appels[0][1]["lon"].count("|") == 1
+
+
+def test_un_point_hors_couverture_reste_sans_altitude():
+    # L'IGN rend -99999 en mer et sur quelques territoires ultramarins :
+    # le prendre pour une altitude enterrerait la commune à 99 km sous la mer.
+    communes = [
+        Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0),
+        Commune(insee="2", nom="B", departement="97", lat=14.6, lon=-61.07),
+    ]
+    session = FausseSession([{"elevations": [280.0, ELEVATION_NO_DATA]}])
+
+    fetch_elevations(session, communes, batch=2, pause=lambda _: None)
+
+    assert communes[0].altitude == 280.0
+    assert communes[1].altitude is None
+
+
+def test_les_altitudes_deja_connues_ne_sont_pas_redemandees(tmp_path):
+    # Une reprise après incident ne doit pas refaire les centaines de
+    # requêtes déjà abouties.
+    cache = tmp_path / "altitudes.json"
+    cache.write_text('{"1": 280.0}')
+    communes = [
+        Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0),
+        Commune(insee="2", nom="B", departement="01", lat=46.1, lon=5.1),
+    ]
+    session = FausseSession([{"elevations": [310.0]}])
+
+    fetch_elevations(session, communes, batch=150, pause=lambda _: None, cache=cache)
+
+    assert communes[0].altitude == 280.0
+    assert communes[1].altitude == 310.0
+    # Une seule requête : la première commune venait du cache.
+    assert len(session.appels) == 1
+    assert json.loads(cache.read_text()) == {"1": 280.0, "2": 310.0}
 
 
 def test_un_lot_de_taille_inattendue_est_rejete():
@@ -94,47 +133,60 @@ def test_un_lot_de_taille_inattendue_est_rejete():
         Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0),
         Commune(insee="2", nom="B", departement="01", lat=46.1, lon=5.1),
     ]
-    session = FausseSession([{"elevation": [100.0]}])
+    session = FausseSession([{"elevations": [100.0]}])
 
     with pytest.raises(ValueError, match="altitudes"):
         fetch_elevations(session, communes, batch=2, pause=lambda _: None)
 
 
 class SessionLimitee:
-    """Refuse les `refus` premiers appels avec un 429, puis répond."""
+    """Refuse les `refus` premiers appels, puis répond."""
 
-    def __init__(self, refus, payload):
+    def __init__(self, refus, payload, code=429):
         self.restants = refus
         self._payload = payload
+        self._code = code
         self.appels = 0
 
     def get(self, url, params=None, timeout=None):
         self.appels += 1
         if self.restants > 0:
             self.restants -= 1
-            return FauxRetour(None, status_code=429)
+            return FauxRetour(None, status_code=self._code)
         return FauxRetour(self._payload)
 
 
 def test_une_limitation_de_debit_est_reessayee():
-    # Open-Meteo refuse les rafales : sans reprise, la construction de
-    # l'index s'arrête au bout de quelques dizaines de lots.
+    # Sans reprise, un simple refus passager arrête la construction de
+    # l'index au milieu des 35 000 communes.
     communes = [Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0)]
-    session = SessionLimitee(2, {"elevation": [100.0]})
+    session = SessionLimitee(2, {"elevations": [100.0]})
     attentes = []
 
     fetch_elevations(session, communes, batch=1, pause=attentes.append)
 
     assert communes[0].altitude == 100.0
     assert session.appels == 3
-    # Attente exponentielle : 5 s puis 10 s.
-    assert attentes == [5.0, 10.0]
+    # Attente exponentielle : 2 s puis 4 s.
+    assert attentes == [2.0, 4.0]
+
+
+def test_un_service_surcharge_est_aussi_reessaye():
+    # Un service saturé répond 503 et non 429 : le traiter comme une erreur
+    # définitive perdrait tout le travail en cours.
+    communes = [Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0)]
+    session = SessionLimitee(1, {"elevations": [100.0]}, code=503)
+
+    fetch_elevations(session, communes, batch=1, pause=lambda _: None)
+
+    assert communes[0].altitude == 100.0
+    assert session.appels == 2
 
 
 def test_l_attente_de_reprise_est_plafonnee():
-    # Au-delà d'une minute, insister plus longtemps ne sert à rien.
+    # Au-delà d'une demi-minute, insister plus longtemps ne sert à rien.
     communes = [Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0)]
-    session = SessionLimitee(7, {"elevation": [100.0]})
+    session = SessionLimitee(5, {"elevations": [100.0]})
     attentes = []
 
     fetch_elevations(session, communes, batch=1, pause=attentes.append)
@@ -144,9 +196,9 @@ def test_l_attente_de_reprise_est_plafonnee():
 
 def test_une_limitation_persistante_finit_par_echouer():
     communes = [Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0)]
-    session = SessionLimitee(99, {"elevation": [100.0]})
+    session = SessionLimitee(99, {"elevations": [100.0]})
 
-    with pytest.raises(RuntimeError, match="débit"):
+    with pytest.raises(RuntimeError, match="refuse toujours"):
         fetch_elevations(session, communes, batch=1, pause=lambda _: None)
 
 

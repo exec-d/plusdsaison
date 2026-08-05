@@ -115,16 +115,33 @@ def main() -> None:
     communes = fetch_communes(session)
     print(f"{len(communes)} communes récupérées")
 
+    # Rattacher avant de relever les altitudes : l'orographie de la maille
+    # sert de repli pour les communes que le service altimétrique ne couvre
+    # pas, et elle n'est connue qu'une fois le rattachement fait.
+    attach_to_land_cells(communes, lats, lons, masque)
+    eloignees = [c for c in communes if c.distance_km and c.distance_km > MAX_DISTANCE_KM]
+    print(f"{len(eloignees)} communes à plus de {MAX_DISTANCE_KM:.0f} km de leur maille")
+
     def avancement(traitees: int, total: int) -> None:
         if traitees % 5000 < ELEVATION_BATCH or traitees == total:
             print(f"  altitudes {traitees}/{total}", flush=True)
 
-    fetch_elevations(session, communes, progres=avancement)
-    print("altitudes récupérées")
+    args.cache.mkdir(parents=True, exist_ok=True)
+    fetch_elevations(
+        session, communes, progres=avancement, cache=args.cache / "altitudes.json"
+    )
 
-    attach_to_land_cells(communes, lats, lons, masque)
-    eloignees = [c for c in communes if c.distance_km and c.distance_km > MAX_DISTANCE_KM]
-    print(f"{len(eloignees)} communes à plus de {MAX_DISTANCE_KM:.0f} km de leur maille")
+    # Une altitude inconnue prend celle du modèle : la correction
+    # altitudinale devient alors neutre, ce qui est le comportement honnête
+    # quand on ignore la hauteur réelle — plutôt qu'un zéro qui la fausserait.
+    orographies = {m.cell_id: m.orography_m for m in mailles}
+    sans_altitude = [c for c in communes if c.altitude is None]
+    for commune in sans_altitude:
+        commune.altitude = orographies.get(commune.cell_id, 0.0)
+    print(
+        f"altitudes récupérées ({len(sans_altitude)} hors couverture, "
+        "repliées sur l'orographie du modèle)"
+    )
 
     index = args.out / "index"
     index.mkdir(parents=True, exist_ok=True)
