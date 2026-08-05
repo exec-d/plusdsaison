@@ -1,0 +1,49 @@
+name: Validation Météo-France
+
+# Hebdomadaire : les données de référence bougent peu, et un écart de
+# pipeline se détecte aussi bien en sept jours qu'en un.
+# 4 h UTC lundi = 5 h Paris en hiver, 6 h en été.
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: validation
+  cancel-in-progress: false
+
+jobs:
+  valider:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Dépendances
+        run: pip install -r tools/requirements.txt
+
+      # Quatre départements couvrant plaine, littoral, montagne et Corse :
+      # c'est là que les erreurs de rattachement et de correction
+      # altitudinale se voient en premier.
+      - name: Valider
+        run: |
+          cd tools && python run_validate.py --out .. \
+            --dept 01 --dept 29 --dept 74 --dept 2A
+
+      - name: Publier les écarts
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add validation/
+          git diff --quiet --cached ||
+            git commit -m "Écarts de validation au $(date -u +%Y-%m-%d)"
+          git push
