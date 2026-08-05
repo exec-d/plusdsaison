@@ -6,6 +6,7 @@ import json
 
 import numpy as np
 import pytest
+import requests
 
 from plusdsaison.communes import (
     ELEVATION_BACKOFF_MAX_S,
@@ -192,6 +193,54 @@ def test_l_attente_de_reprise_est_plafonnee():
     fetch_elevations(session, communes, batch=1, pause=attentes.append)
 
     assert max(attentes) == ELEVATION_BACKOFF_MAX_S
+
+
+class SessionEtendueLimitee:
+    """Refuse tout lot de plus de `maxi` points, comme le fait le service
+    quand il doit ouvrir trop de dalles raster."""
+
+    def __init__(self, maxi):
+        self._maxi = maxi
+        self.tailles = []
+
+    def get(self, url, params=None, timeout=None):
+        n = params["lon"].count("|") + 1
+        self.tailles.append(n)
+        if n > self._maxi:
+            reponse = requests.Response()
+            reponse.status_code = 400
+            reponse._content = (
+                b'{"error": {"code": "ROK4_TOO_MUCH_TILES", "description": "..."}}'
+            )
+            raise requests.HTTPError("400", response=reponse)
+        return FauxRetour({"elevations": [100.0] * n})
+
+
+def test_un_lot_trop_etendu_est_scinde():
+    # Le service ne borne pas le nombre de points mais l'étendue couverte :
+    # un paquet ultramarin éparpillé sur le globe se fait refuser là où le
+    # même nombre de communes voisines passe.
+    communes = [
+        Commune(insee=str(i), nom=f"C{i}", departement="97", lat=46.0, lon=5.0)
+        for i in range(8)
+    ]
+    session = SessionEtendueLimitee(maxi=2)
+
+    fetch_elevations(session, communes, batch=8, pause=lambda _: None)
+
+    assert all(c.altitude == 100.0 for c in communes)
+    # 8 refusé, puis 4 et 4 refusés, puis quatre lots de 2 acceptés.
+    assert session.tailles == [8, 4, 2, 2, 4, 2, 2]
+
+
+def test_un_lot_indivisible_refuse_reste_une_erreur():
+    # Une commune seule que le service refuse n'est pas un problème
+    # d'étendue : ne pas la masquer en scindant à l'infini.
+    communes = [Commune(insee="1", nom="A", departement="97", lat=46.0, lon=5.0)]
+    session = SessionEtendueLimitee(maxi=0)
+
+    with pytest.raises(requests.HTTPError):
+        fetch_elevations(session, communes, batch=1, pause=lambda _: None)
 
 
 def test_une_limitation_persistante_finit_par_echouer():

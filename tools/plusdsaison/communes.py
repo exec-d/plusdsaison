@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import requests
 from scipy.spatial import cKDTree
 
 from .grid import cell_id as _cell_id
@@ -37,6 +38,14 @@ ELEVATION_NO_DATA = -99999.0
 ELEVATION_PAUSE_S = 0.2
 ELEVATION_RETRIES = 6
 ELEVATION_BACKOFF_MAX_S = 30.0
+
+# Le service ne borne pas le nombre de points mais le nombre de dalles
+# raster qu'il doit ouvrir pour y répondre. Un lot de communes voisines
+# passe sans problème ; le même nombre de points éparpillés de la Martinique
+# à la Nouvelle-Calédonie se fait refuser. Comme geo.api.gouv.fr rend les
+# communes groupées par département, seul le paquet ultramarin final est
+# concerné : on le scinde jusqu'à ce qu'il passe.
+ELEVATION_TOO_WIDE = "ROK4_TOO_MUCH_TILES"
 
 EARTH_RADIUS_KM = 6371.0
 MAX_DISTANCE_KM = 15.0
@@ -99,6 +108,40 @@ def _get_avec_reprise(session, params: dict, pause) -> object:
     )
 
 
+def _lot_trop_etendu(erreur: Exception) -> bool:
+    """Le service a-t-il refusé le lot pour son étendue géographique ?"""
+    reponse = getattr(erreur, "response", None)
+    if reponse is None or getattr(reponse, "status_code", None) != 400:
+        return False
+    return ELEVATION_TOO_WIDE in getattr(reponse, "text", "")
+
+
+def _relever_lot(session, lot: list[Commune], pause) -> list[float]:
+    """Altitudes d'un lot, en le scindant si le service refuse son étendue."""
+    try:
+        reponse = _get_avec_reprise(
+            session,
+            {
+                # L'IGN sépare ses coordonnées par des barres verticales, et
+                # les attend dans l'ordre longitude puis latitude.
+                "lon": "|".join(f"{c.lon:.6f}" for c in lot),
+                "lat": "|".join(f"{c.lat:.6f}" for c in lot),
+                "resource": ELEVATION_RESOURCE,
+                "zonly": "true",
+            },
+            pause,
+        )
+    except requests.HTTPError as erreur:
+        if len(lot) > 1 and _lot_trop_etendu(erreur):
+            milieu = len(lot) // 2
+            return (
+                _relever_lot(session, lot[:milieu], pause)
+                + _relever_lot(session, lot[milieu:], pause)
+            )
+        raise
+    return reponse.json()["elevations"]
+
+
 def fetch_elevations(
     session,
     communes: list[Commune],
@@ -137,19 +180,7 @@ def fetch_elevations(
         lot = restantes[debut : debut + batch]
         if debut:
             pause(ELEVATION_PAUSE_S)
-        reponse = _get_avec_reprise(
-            session,
-            {
-                # L'IGN sépare ses coordonnées par des barres verticales, et
-                # les attend dans l'ordre longitude puis latitude.
-                "lon": "|".join(f"{c.lon:.6f}" for c in lot),
-                "lat": "|".join(f"{c.lat:.6f}" for c in lot),
-                "resource": ELEVATION_RESOURCE,
-                "zonly": "true",
-            },
-            pause,
-        )
-        altitudes = reponse.json()["elevations"]
+        altitudes = _relever_lot(session, lot, pause)
 
         if len(altitudes) != len(lot):
             raise ValueError(
