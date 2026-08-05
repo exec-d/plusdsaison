@@ -12,9 +12,11 @@ from plusdsaison.cds import (
     PRECIPITATION_DAY_SHIFT,
     PRECIPITATION_FACTOR,
     STATIC_DATASET,
+    build_land_probe_request,
     build_precipitation_request,
     build_request,
     build_static_request,
+    retrieve_land_probe,
     retrieve_precipitation_year,
     retrieve_static,
     retrieve_year,
@@ -107,6 +109,27 @@ def test_l_echantillon_statique_est_mis_en_cache(tmp_path):
     attendu.write_bytes(b"deja la")
 
     assert retrieve_static(ClientQuiExplose(), tmp_path) == attendu
+
+
+def test_la_sonde_du_masque_terre_ne_couvre_qu_un_jour():
+    # Relever quelles mailles sont servies ne demande qu'une journée, mais
+    # sur toute l'emprise.
+    requete = build_land_probe_request()
+    assert requete["month"] == ["07"]
+    assert requete["day"] == ["15"]
+    assert requete["area"] == AREA
+    assert requete["variable"] == ["2m_temperature"]
+
+
+def test_la_sonde_du_masque_terre_est_mise_en_cache(tmp_path):
+    class ClientQuiExplose:
+        def retrieve(self, *args, **kwargs):
+            raise AssertionError("le cache aurait dû éviter cet appel")
+
+    attendu = tmp_path / "land_probe.nc"
+    attendu.write_bytes(b"deja la")
+
+    assert retrieve_land_probe(ClientQuiExplose(), tmp_path) == attendu
 
 
 def test_les_precipitations_ne_viennent_pas_du_dataset_quotidien():

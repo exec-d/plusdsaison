@@ -129,6 +129,38 @@ def retrieve_static(client, cache_dir: Path) -> Path:
     return cible
 
 
+def build_land_probe_request() -> dict:
+    """Requête d'une seule journée de température sur toute l'emprise.
+
+    Sert uniquement à relever quelles mailles sont effectivement servies.
+    """
+    requete = build_request("2m_temperature", STATISTICS["mean"], 2023)
+    requete["month"] = ["07"]
+    requete["day"] = ["15"]
+    return requete
+
+
+def retrieve_land_probe(client, cache_dir: Path) -> Path:
+    """Télécharge la sonde du masque terre, ou rend celle déjà en cache.
+
+    Le masque terre ne se déduit ni du géopotentiel ni de `land_sea_mask` :
+    le premier est fini partout, y compris en mer, et le second désigne
+    11 493 mailles là où ERA5-Land en sert 11 496 — 143 mailles en
+    désaccord. Seule la disponibilité réelle d'une variable
+    météorologique donne le masque exact, et c'est celui-là qu'il faut :
+    publier une maille sans données produirait un fichier vide.
+    """
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cible = cache_dir / "land_probe.nc"
+
+    if cible.exists() and cible.stat().st_size > 0:
+        return cible
+
+    client.retrieve(DATASET, build_land_probe_request(), str(cible))
+    return cible
+
+
 def build_precipitation_request(year: int) -> dict:
     """Requête d'une année de précipitations, une seule heure par jour.
 

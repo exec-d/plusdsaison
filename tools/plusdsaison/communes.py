@@ -6,6 +6,7 @@ appel ramènent les 35 000 communes en 350 requêtes, exécutées une seule fois
 à la construction de l'index.
 """
 
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -16,6 +17,16 @@ from .grid import cell_id as _cell_id
 GEO_API = "https://geo.api.gouv.fr/communes"
 ELEVATION_API = "https://api.open-meteo.com/v1/elevation"
 ELEVATION_BATCH = 100
+
+# Open-Meteo limite le débit de son offre gratuite, et pondère ses appels
+# par le nombre de points demandés : 350 lots de 100 communes ne pèsent pas
+# 350 unités mais 35 000. Enchaîner les lots sans pause déclenche un HTTP 429
+# au bout de quelques dizaines d'appels, et 63 s de reprise n'y suffisent
+# pas. La fenêtre se recharge en revanche en quelques minutes, d'où ce
+# rythme volontairement lent : la construction de l'index est ponctuelle.
+ELEVATION_PAUSE_S = 1.5
+ELEVATION_RETRIES = 8
+ELEVATION_BACKOFF_MAX_S = 60.0
 
 EARTH_RADIUS_KM = 6371.0
 MAX_DISTANCE_KM = 15.0
@@ -62,19 +73,40 @@ def fetch_communes(session) -> list[Commune]:
     return communes
 
 
-def fetch_elevations(session, communes: list[Commune], batch: int = ELEVATION_BATCH) -> None:
+def _get_avec_reprise(session, params: dict, pause) -> object:
+    """Un appel Elevation, en réessayant tant qu'on est limité en débit."""
+    for tentative in range(ELEVATION_RETRIES):
+        reponse = session.get(ELEVATION_API, params=params, timeout=60)
+        # Les fausses sessions des tests ne portent pas de code HTTP :
+        # les traiter comme des succès.
+        if getattr(reponse, "status_code", 200) != 429:
+            reponse.raise_for_status()
+            return reponse
+        # Attente plafonnée : au-delà d'une minute, insister plus longtemps
+        # ne sert à rien, la fenêtre s'est rechargée ou le quota est épuisé.
+        pause(min(5.0 * 2**tentative, ELEVATION_BACKOFF_MAX_S))
+    raise RuntimeError(
+        f"Open-Meteo limite toujours le débit après {ELEVATION_RETRIES} tentatives ; "
+        "réduire ELEVATION_BATCH ou reprendre plus tard"
+    )
+
+
+def fetch_elevations(
+    session, communes: list[Commune], batch: int = ELEVATION_BATCH, pause=time.sleep
+) -> None:
     """Renseigne `altitude` sur place, par lots groupés."""
     for debut in range(0, len(communes), batch):
         lot = communes[debut : debut + batch]
-        reponse = session.get(
-            ELEVATION_API,
-            params={
+        if debut:
+            pause(ELEVATION_PAUSE_S)
+        reponse = _get_avec_reprise(
+            session,
+            {
                 "latitude": ",".join(f"{c.lat:.4f}" for c in lot),
                 "longitude": ",".join(f"{c.lon:.4f}" for c in lot),
             },
-            timeout=60,
+            pause,
         )
-        reponse.raise_for_status()
         altitudes = reponse.json()["elevation"]
 
         if len(altitudes) != len(lot):

@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from plusdsaison.communes import (
+    ELEVATION_BACKOFF_MAX_S,
     MAX_DISTANCE_KM,
     Commune,
     attach_to_land_cells,
@@ -17,8 +18,9 @@ from plusdsaison.grid import cell_id
 
 
 class FauxRetour:
-    def __init__(self, payload):
+    def __init__(self, payload, status_code=200):
         self._payload = payload
+        self.status_code = status_code
 
     def raise_for_status(self):
         pass
@@ -79,7 +81,7 @@ def test_les_altitudes_sont_demandees_par_lots():
         {"elevation": [500.0]},
     ])
 
-    fetch_elevations(session, communes, batch=2)
+    fetch_elevations(session, communes, batch=2, pause=lambda _: None)
 
     assert [c.altitude for c in communes] == [100.0, 200.0, 300.0, 400.0, 500.0]
     assert len(session.appels) == 3
@@ -95,7 +97,57 @@ def test_un_lot_de_taille_inattendue_est_rejete():
     session = FausseSession([{"elevation": [100.0]}])
 
     with pytest.raises(ValueError, match="altitudes"):
-        fetch_elevations(session, communes, batch=2)
+        fetch_elevations(session, communes, batch=2, pause=lambda _: None)
+
+
+class SessionLimitee:
+    """Refuse les `refus` premiers appels avec un 429, puis répond."""
+
+    def __init__(self, refus, payload):
+        self.restants = refus
+        self._payload = payload
+        self.appels = 0
+
+    def get(self, url, params=None, timeout=None):
+        self.appels += 1
+        if self.restants > 0:
+            self.restants -= 1
+            return FauxRetour(None, status_code=429)
+        return FauxRetour(self._payload)
+
+
+def test_une_limitation_de_debit_est_reessayee():
+    # Open-Meteo refuse les rafales : sans reprise, la construction de
+    # l'index s'arrête au bout de quelques dizaines de lots.
+    communes = [Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0)]
+    session = SessionLimitee(2, {"elevation": [100.0]})
+    attentes = []
+
+    fetch_elevations(session, communes, batch=1, pause=attentes.append)
+
+    assert communes[0].altitude == 100.0
+    assert session.appels == 3
+    # Attente exponentielle : 5 s puis 10 s.
+    assert attentes == [5.0, 10.0]
+
+
+def test_l_attente_de_reprise_est_plafonnee():
+    # Au-delà d'une minute, insister plus longtemps ne sert à rien.
+    communes = [Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0)]
+    session = SessionLimitee(7, {"elevation": [100.0]})
+    attentes = []
+
+    fetch_elevations(session, communes, batch=1, pause=attentes.append)
+
+    assert max(attentes) == ELEVATION_BACKOFF_MAX_S
+
+
+def test_une_limitation_persistante_finit_par_echouer():
+    communes = [Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0)]
+    session = SessionLimitee(99, {"elevation": [100.0]})
+
+    with pytest.raises(RuntimeError, match="débit"):
+        fetch_elevations(session, communes, batch=1, pause=lambda _: None)
 
 
 def test_haversine_sur_une_distance_connue():
