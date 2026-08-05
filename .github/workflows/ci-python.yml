@@ -1,0 +1,30 @@
+name: CI Python
+
+on:
+  push:
+    paths: ['tools/**', '.github/workflows/ci-python.yml']
+  pull_request:
+    paths: ['tools/**', '.github/workflows/ci-python.yml']
+
+# Moindre privilège : la CI ne fait que lire et tester.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Dépendances
+        run: pip install -r tools/requirements.txt
+
+      - name: Tests
+        run: cd tools && python -m pytest tests/ -v
