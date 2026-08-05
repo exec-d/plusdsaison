@@ -74,22 +74,33 @@ class Commune:
 
 
 def fetch_communes(session) -> list[Commune]:
-    """Toutes les communes de France métropolitaine et d'outre-mer."""
+    """Toutes les communes de France métropolitaine et d'outre-mer.
+
+    La position retenue est celle de la **mairie**, pas le centroïde de la
+    commune. L'altitude qui en découle sert à corriger la température pour
+    les habitants : c'est donc celle du bourg qu'il faut, pas celle du centre
+    géométrique d'un polygone. Chamonix-Mont-Blanc le montre bien — sa
+    commune englobe le mont Blanc, son centroïde tombe à 1 885 m à mi-pente
+    quand la ville est à 1 035 m. Les 850 m d'écart valent 5,5 °C de
+    correction adiabatique.
+    """
     reponse = session.get(
         GEO_API,
-        params={"fields": "nom,code,codeDepartement,centre", "format": "json"},
+        params={"fields": "nom,code,codeDepartement,centre,mairie", "format": "json"},
         timeout=120,
     )
     reponse.raise_for_status()
 
     communes = []
     for brut in reponse.json():
-        centre = brut.get("centre")
-        if not centre:
-            # Quelques entités administratives n'ont pas de centroïde publié :
-            # sans coordonnées, aucun rattachement n'est possible.
+        # Quelques communes n'ont pas de mairie géolocalisée ; le centroïde
+        # prend alors le relais, faute de mieux.
+        point = brut.get("mairie") or brut.get("centre")
+        if not point:
+            # Quelques entités administratives n'ont aucune coordonnée
+            # publiée : sans elles, aucun rattachement n'est possible.
             continue
-        lon, lat = centre["coordinates"]
+        lon, lat = point["coordinates"]
         communes.append(
             Commune(
                 insee=brut["code"],

@@ -45,13 +45,14 @@ class FausseSession:
         return FauxRetour(self._reponses.pop(0))
 
 
-def test_les_communes_sont_lues_avec_leur_centre():
+def test_les_communes_sont_lues_a_leur_mairie():
     session = FausseSession([[
         {
             "code": "01443",
             "nom": "Villars-les-Dombes",
             "codeDepartement": "01",
-            "centre": {"type": "Point", "coordinates": [5.0308, 46.0022]},
+            "mairie": {"type": "Point", "coordinates": [5.0308, 46.0022]},
+            "centre": {"type": "Point", "coordinates": [5.0400, 46.0100]},
         }
     ]])
 
@@ -67,9 +68,27 @@ def test_les_communes_sont_lues_avec_leur_centre():
     assert communes[0].lat == pytest.approx(46.0022)
 
 
-def test_une_commune_sans_centre_est_ignoree():
+def test_le_centroide_ne_sert_qu_a_defaut_de_mairie():
+    # Le centroïde d'une commune de montagne tombe à mi-pente : celui de
+    # Chamonix est à 1 885 m quand la ville est à 1 035 m, soit 5,5 °C de
+    # correction adiabatique d'écart.
     session = FausseSession([[
-        {"code": "97501", "nom": "Sans centre", "codeDepartement": "975"}
+        {
+            "code": "74056",
+            "nom": "Chamonix-Mont-Blanc",
+            "codeDepartement": "74",
+            "centre": {"type": "Point", "coordinates": [6.9291, 45.9296]},
+        }
+    ]])
+
+    communes = fetch_communes(session)
+
+    assert communes[0].lon == pytest.approx(6.9291)
+
+
+def test_une_commune_sans_aucune_coordonnee_est_ignoree():
+    session = FausseSession([[
+        {"code": "97501", "nom": "Sans coordonnées", "codeDepartement": "975"}
     ]])
     assert fetch_communes(session) == []
 
