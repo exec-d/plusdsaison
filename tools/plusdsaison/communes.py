@@ -92,9 +92,18 @@ def _get_avec_reprise(session, params: dict, pause) -> object:
 
 
 def fetch_elevations(
-    session, communes: list[Commune], batch: int = ELEVATION_BATCH, pause=time.sleep
+    session,
+    communes: list[Commune],
+    batch: int = ELEVATION_BATCH,
+    pause=time.sleep,
+    progres=None,
 ) -> None:
-    """Renseigne `altitude` sur place, par lots groupés."""
+    """Renseigne `altitude` sur place, par lots groupés.
+
+    `progres` reçoit (communes traitées, total) après chaque lot : au rythme
+    imposé par Open-Meteo la boucle dure une dizaine de minutes, pendant
+    lesquelles un appelant muet est indiscernable d'un appelant bloqué.
+    """
     for debut in range(0, len(communes), batch):
         lot = communes[debut : debut + batch]
         if debut:
@@ -115,6 +124,9 @@ def fetch_elevations(
             )
         for commune, altitude in zip(lot, altitudes):
             commune.altitude = float(altitude)
+
+        if progres is not None:
+            progres(min(debut + batch, len(communes)), len(communes))
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -19,6 +19,7 @@ import xarray as xr
 
 from plusdsaison.cds import retrieve_land_probe, retrieve_static
 from plusdsaison.communes import (
+    ELEVATION_BATCH,
     MAX_DISTANCE_KM,
     attach_to_land_cells,
     fetch_communes,
@@ -114,7 +115,11 @@ def main() -> None:
     communes = fetch_communes(session)
     print(f"{len(communes)} communes récupérées")
 
-    fetch_elevations(session, communes)
+    def avancement(traitees: int, total: int) -> None:
+        if traitees % 5000 < ELEVATION_BATCH or traitees == total:
+            print(f"  altitudes {traitees}/{total}", flush=True)
+
+    fetch_elevations(session, communes, progres=avancement)
     print("altitudes récupérées")
 
     attach_to_land_cells(communes, lats, lons, masque)
