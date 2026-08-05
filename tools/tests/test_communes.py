@@ -109,6 +109,34 @@ def test_un_point_hors_couverture_reste_sans_altitude():
     assert communes[1].altitude is None
 
 
+def test_une_altitude_interpolee_en_bordure_est_ecartee():
+    # En bordure de couverture le service mélange du relief réel et sa
+    # sentinelle : six communes insulaires sont ainsi ressorties vers
+    # -87 000 m, ce qu'aucun test d'égalité à -99999 n'attrape. Une telle
+    # valeur appliquerait une correction de plusieurs centaines de degrés.
+    communes = [
+        Commune(insee="1", nom="Sein", departement="29", lat=48.03, lon=-4.85),
+        Commune(insee="2", nom="Groix", departement="56", lat=47.63, lon=-3.45),
+    ]
+    session = FausseSession([{"elevations": [-55347.43, -87049.66]}])
+
+    fetch_elevations(session, communes, batch=2, pause=lambda _: None)
+
+    assert communes[0].altitude is None
+    assert communes[1].altitude is None
+
+
+def test_une_altitude_plausible_meme_negative_est_retenue():
+    # Polders et dépressions descendent réellement sous le niveau de la mer :
+    # le garde-fou ne doit pas les écarter avec les valeurs aberrantes.
+    communes = [Commune(insee="1", nom="A", departement="13", lat=43.5, lon=4.5)]
+    session = FausseSession([{"elevations": [-3.2]}])
+
+    fetch_elevations(session, communes, batch=1, pause=lambda _: None)
+
+    assert communes[0].altitude == -3.2
+
+
 def test_les_altitudes_deja_connues_ne_sont_pas_redemandees(tmp_path):
     # Une reprise après incident ne doit pas refaire les centaines de
     # requêtes déjà abouties.

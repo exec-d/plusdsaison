@@ -33,6 +33,16 @@ ELEVATION_BATCH = 150
 # altitude, sous peine de placer des communes à 99 km sous le niveau de la mer.
 ELEVATION_NO_DATA = -99999.0
 
+# En bordure de couverture le service interpole entre du relief réel et sa
+# sentinelle, ce qui produit des valeurs intermédiaires qu'aucun test
+# d'égalité n'attrape : six communes insulaires et littorales sont ainsi
+# ressorties entre -52 000 et -87 000 m. Une altitude de -87 000 m
+# appliquerait une correction de +566 °C à la commune concernée, sans que
+# rien ne le signale. Seules les valeurs physiquement plausibles sont donc
+# retenues — de la mer Morte au sommet des Alpes, avec de la marge.
+ELEVATION_MIN_M = -500.0
+ELEVATION_MAX_M = 5000.0
+
 # Le service reste courtois mais n'est pas sans limite : une courte pause
 # entre deux lots, et une reprise exponentielle en cas de refus.
 ELEVATION_PAUSE_S = 0.2
@@ -188,7 +198,7 @@ def fetch_elevations(
             )
         for commune, altitude in zip(lot, altitudes):
             valeur = float(altitude)
-            if valeur == ELEVATION_NO_DATA:
+            if not ELEVATION_MIN_M <= valeur <= ELEVATION_MAX_M:
                 continue
             commune.altitude = valeur
             connues[commune.insee] = valeur
