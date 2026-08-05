@@ -1,0 +1,60 @@
+name: Année en cours
+
+# Le dataset accuse six jours de traitement : une exécution quotidienne
+# suffit largement. 5 h UTC = 6 h Paris en hiver, 7 h en été — hors des
+# heures de pointe des runners.
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+# Moindre privilège : écrire la branche orpheline et rien d'autre.
+permissions:
+  contents: write
+
+# Deux exécutions simultanées se battraient sur le force-push.
+concurrency:
+  group: donnees-courantes
+  cancel-in-progress: false
+
+jobs:
+  rafraichir:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Dépendances
+        run: pip install -r tools/requirements.txt
+
+      # La clé passe par l'environnement plutôt que par une interpolation
+      # dans le script : elle ne peut ainsi pas être interprétée par le shell.
+      - name: Identifiants Copernicus
+        env:
+          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
+        run: |
+          umask 077
+          printf 'url: https://cds.climate.copernicus.eu/api\nkey: %s\n' \
+            "$CDSAPI_KEY" > ~/.cdsapirc
+
+      - name: Rafraîchir l'année en cours
+        run: cd tools && python daily.py --out .. --cache .cache
+
+      # L'année en cours est réécrite chaque jour : la committer sur main
+      # produirait 2,6 Go d'historique par an. Une branche orpheline
+      # force-pushée garde une URL stable sans rien accumuler.
+      - name: Publier sur la branche orpheline
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan data-current
+          git rm -rf --cached . >/dev/null
+          git add -f current/
+          git commit -m "Année en cours au $(date -u +%Y-%m-%d)"
+          git push --force origin data-current
