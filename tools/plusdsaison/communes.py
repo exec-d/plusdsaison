@@ -8,9 +8,17 @@ appel ramènent les 35 000 communes en 350 requêtes, exécutées une seule fois
 
 from dataclasses import dataclass
 
+import numpy as np
+from scipy.spatial import cKDTree
+
+from .grid import cell_id as _cell_id
+
 GEO_API = "https://geo.api.gouv.fr/communes"
 ELEVATION_API = "https://api.open-meteo.com/v1/elevation"
 ELEVATION_BATCH = 100
+
+EARTH_RADIUS_KM = 6371.0
+MAX_DISTANCE_KM = 15.0
 
 
 @dataclass
@@ -75,3 +83,56 @@ def fetch_elevations(session, communes: list[Commune], batch: int = ELEVATION_BA
             )
         for commune, altitude in zip(lot, altitudes):
             commune.altitude = float(altitude)
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distance orthodromique entre deux points, en kilomètres."""
+    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+    dphi = phi2 - phi1
+    dlambda = np.radians(lon2 - lon1)
+    a = np.sin(dphi / 2) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2) ** 2
+    return float(2 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(a)))
+
+
+def attach_to_land_cells(
+    communes: list[Commune], lats: np.ndarray, lons: np.ndarray, mask: np.ndarray
+) -> None:
+    """Rattache chaque commune à la maille TERRESTRE la plus proche.
+
+    ERA5-Land ne porte pas de données en mer : un rattachement au plus proche
+    voisin sans filtrage enverrait les communes littorales sur des mailles
+    vides. On ne cherche donc que parmi les mailles terrestres.
+
+    La recherche passe par un arbre k-d sur des coordonnées projetées en
+    équirectangulaire — l'approximation est négligeable à l'échelle de la
+    France — puis la distance retenue est recalculée en haversine exacte.
+    """
+    lignes, colonnes = np.nonzero(mask)
+    if len(lignes) == 0:
+        raise ValueError("aucune maille terrestre dans le masque fourni")
+
+    maille_lats = lats[lignes]
+    maille_lons = lons[colonnes]
+
+    # Projection équirectangulaire centrée sur l'emprise : la longitude est
+    # comprimée par le cosinus de la latitude moyenne pour que les distances
+    # euclidiennes de l'arbre restent proportionnelles aux distances réelles.
+    lat_ref = np.radians(float(np.mean(lats)))
+
+    def projeter(la, lo):
+        return np.column_stack([np.asarray(la), np.asarray(lo) * np.cos(lat_ref)])
+
+    arbre = cKDTree(projeter(maille_lats, maille_lons))
+    requete = projeter(
+        [c.lat for c in communes],
+        [c.lon for c in communes],
+    )
+    _, indices = arbre.query(requete, k=1)
+
+    n_lon = len(lons)
+    for commune, index in zip(communes, np.atleast_1d(indices)):
+        ligne, colonne = int(lignes[index]), int(colonnes[index])
+        commune.cell_id = _cell_id(ligne, colonne, n_lon)
+        commune.distance_km = haversine_km(
+            commune.lat, commune.lon, float(lats[ligne]), float(lons[colonne])
+        )
