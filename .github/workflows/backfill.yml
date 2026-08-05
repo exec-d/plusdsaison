@@ -1,0 +1,83 @@
+name: Backfill historique
+
+# Jamais programmé : le backfill complet dépasse la limite de 6 h d'un
+# runner GitHub et se lance en local. Ce workflow sert aux rattrapages
+# d'une ou deux années, qui tiennent dans le temps imparti.
+on:
+  workflow_dispatch:
+    inputs:
+      annee_debut:
+        description: 'Première année'
+        required: true
+      annee_fin:
+        description: 'Dernière année'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Dépendances
+        run: pip install -r tools/requirements.txt
+
+      # Les entrées d'un workflow_dispatch sont du texte libre. Les passer
+      # par l'environnement et refuser tout ce qui n'est pas une année évite
+      # qu'elles soient interprétées par le shell.
+      - name: Valider les années
+        env:
+          ANNEE_DEBUT: ${{ inputs.annee_debut }}
+          ANNEE_FIN: ${{ inputs.annee_fin }}
+        run: |
+          case "$ANNEE_DEBUT" in ([0-9][0-9][0-9][0-9]) ;; (*)
+            echo "année de début invalide" >&2; exit 1 ;;
+          esac
+          case "$ANNEE_FIN" in ([0-9][0-9][0-9][0-9]) ;; (*)
+            echo "année de fin invalide" >&2; exit 1 ;;
+          esac
+          if [ "$ANNEE_FIN" -lt "$ANNEE_DEBUT" ]; then
+            echo "année de fin antérieure à l'année de début" >&2; exit 1
+          fi
+          {
+            echo "ANNEE_DEBUT=$ANNEE_DEBUT"
+            echo "ANNEE_FIN=$ANNEE_FIN"
+          } >> "$GITHUB_ENV"
+
+      - name: Identifiants Copernicus
+        env:
+          CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
+        run: |
+          umask 077
+          printf 'url: https://cds.climate.copernicus.eu/api\nkey: %s\n' \
+            "$CDSAPI_KEY" > ~/.cdsapirc
+
+      - name: Backfill
+        run: |
+          cd tools && python backfill.py \
+            --from "$ANNEE_DEBUT" --to "$ANNEE_FIN" \
+            --out .. --cache .cache
+
+      - name: Publier
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add grid/ manifest.json
+          git diff --quiet --cached ||
+            git commit -m "Backfill $ANNEE_DEBUT-$ANNEE_FIN"
+          git push
