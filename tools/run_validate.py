@@ -21,6 +21,7 @@ import requests
 from scipy.spatial import cKDTree
 
 from plusdsaison.binary import date_to_day, decode_series
+from plusdsaison.communes import haversine_km
 from plusdsaison.correction import correct_temperature
 from plusdsaison.index_io import read_grid_index
 from plusdsaison.validate import Station, compare_series, departement_verdict
@@ -117,7 +118,27 @@ def _serie_de_la_maille(racine: Path, cell_id: int) -> tuple[int, np.ndarray] | 
     return debut, serie
 
 
-def _comparer_ressource(session, ressource: dict, mailles: dict, arbre, ids, racine: Path):
+class Rattacheur:
+    """Trouve la maille la plus proche d'un point.
+
+    Même projection équirectangulaire que le rattachement des communes : à
+    46° de latitude un degré de longitude vaut 0,69 degré de latitude, et
+    chercher sur des degrés bruts désignerait parfois la mauvaise maille.
+    """
+
+    def __init__(self, mailles):
+        self._mailles = list(mailles)
+        self._cos = np.cos(np.radians(np.mean([m.lat for m in self._mailles])))
+        self._arbre = cKDTree(
+            [[m.lat, m.lon * self._cos] for m in self._mailles]
+        )
+
+    def plus_proche(self, lat: float, lon: float):
+        _, index = self._arbre.query([[lat, lon * self._cos]], k=1)
+        return self._mailles[int(np.atleast_1d(index)[0])]
+
+
+def _comparer_ressource(session, ressource: dict, rattacheur: Rattacheur, racine: Path):
     """Compare chaque station d'un CSV à la maille qui la porte."""
     lignes = _lire_csv(session, ressource["url"])
 
@@ -137,9 +158,10 @@ def _comparer_ressource(session, ressource: dict, mailles: dict, arbre, ids, rac
             id=numero, nom=tete.get("NOM_USUEL", ""), lat=lat, lon=lon, altitude=altitude
         )
 
-        _, index = arbre.query([[station.lat, station.lon]], k=1)
-        maille = mailles[ids[int(np.atleast_1d(index)[0])]]
-        if _haversine_grossier(station, maille) > DISTANCE_MAX_KM:
+        maille = rattacheur.plus_proche(station.lat, station.lon)
+        # Une station trop loin de sa maille ne dit plus rien de la maille :
+        # l'écart mesuré porterait sur deux endroits différents.
+        if haversine_km(station.lat, station.lon, maille.lat, maille.lon) > DISTANCE_MAX_KM:
             continue
 
         lu = _serie_de_la_maille(racine, maille.cell_id)
@@ -168,13 +190,6 @@ def _comparer_ressource(session, ressource: dict, mailles: dict, arbre, ids, rac
     return resultats
 
 
-def _haversine_grossier(station: Station, maille) -> float:
-    """Distance station-maille, en kilomètres."""
-    from plusdsaison.communes import haversine_km
-
-    return haversine_km(station.lat, station.lon, maille.lat, maille.lon)
-
-
 def main() -> None:
     parseur = argparse.ArgumentParser(description=__doc__)
     parseur.add_argument("--out", required=True, type=Path)
@@ -182,11 +197,7 @@ def main() -> None:
                          help="code département, répétable")
     args = parseur.parse_args()
 
-    liste = read_grid_index(args.out / "index" / "grid.bin")
-    mailles = {m.cell_id: m for m in liste}
-    ids = [m.cell_id for m in liste]
-    arbre = cKDTree([[m.lat, m.lon] for m in liste])
-
+    rattacheur = Rattacheur(read_grid_index(args.out / "index" / "grid.bin"))
     session = requests.Session()
 
     dossier = args.out / "validation"
@@ -197,7 +208,7 @@ def main() -> None:
         resultats = []
         for ressource in ressources_du_departement(session, departement):
             resultats.extend(
-                _comparer_ressource(session, ressource, mailles, arbre, ids, args.out)
+                _comparer_ressource(session, ressource, rattacheur, args.out)
             )
 
         verdict = departement_verdict(resultats)
