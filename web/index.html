@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlusD'Saison — le climat de votre commune depuis 1950</title>
+<meta name="description" content="Comment le climat de votre commune évolue depuis 1950. Application Android gratuite, sans compte, sans publicité, à partir de données ouvertes.">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0 auto; padding: 2rem 1.25rem; max-width: 42rem;
+    font: 1.05rem/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin-bottom: .25rem; }
+  .accroche { font-size: 1.15rem; opacity: .8; margin-top: 0; }
+  h2 { font-size: 1.2rem; margin-top: 2.5rem; }
+  a.bouton {
+    display: inline-block; margin: 1rem 0; padding: .7rem 1.3rem;
+    border: 2px solid currentColor; border-radius: .4rem;
+    text-decoration: none; font-weight: 600;
+  }
+  footer { margin-top: 3rem; font-size: .9rem; opacity: .75; }
+  code { font-size: .9em; }
+</style>
+</head>
+<body>
+
+<h1>PlusD'Saison</h1>
+<p class="accroche">Comment le climat de votre commune évolue depuis 1950.</p>
+
+<p>
+  Ce n'est pas une application de météo : elle ne dit pas le temps qu'il fera
+  demain. Elle regarde en arrière, et répond à des questions que personne
+  d'autre ne pose — <em>cette année est-elle plus chaude que la précédente ?</em>
+  <em>à quoi ressemble un hiver normal ici ?</em> <em>pleut-il moins qu'avant ?</em>
+</p>
+
+<p>
+  Les 35 000 communes françaises. Aucun compte, aucune publicité, aucun
+  traçage. Les calculs se font sur l'appareil ; une commune consultée une fois
+  reste lisible hors ligne.
+</p>
+
+<p><a class="bouton" href="https://github.com/exec-d/plusdsaison/releases/latest">Télécharger l'APK Android</a></p>
+
+<h2>D'où viennent les chiffres</h2>
+<p>
+  De la réanalyse <strong>ERA5-Land</strong> du service Copernicus sur le
+  changement climatique, sur une grille de 9 km, de 1950 à avant-hier. Les
+  températures sont ramenées à l'altitude réelle de chaque commune par gradient
+  adiabatique — sans quoi l'application serait fausse dans tout l'arc alpin et
+  pyrénéen.
+</p>
+<p>
+  Le traitement est vérifié contre les stations de <strong>Météo-France</strong>
+  et publié ici même : <a href="https://github.com/exec-d/plusdsaison">le code
+  qui produit les données est lisible par quiconque</a>. C'est la contrepartie
+  de n'utiliser que de l'Open Data.
+</p>
+
+<h2>Ce qu'elle ne fait pas</h2>
+<p>
+  Pas de prévision. Pas de projection climatique. Pas de records officiels —
+  ceux-là appartiennent à Météo-France, et l'application n'est ni officielle ni
+  affiliée à un quelconque service public.
+</p>
+
+<footer>
+  <p>
+    Données : <em>Generated using Copernicus Climate Change Service information
+    2026</em> · Météo-France via meteo.data.gouv.fr, Licence Ouverte 2.0 · IGN
+    (ADMIN EXPRESS, RGE ALTI), Licence Ouverte. Détail dans
+    <a href="https://github.com/exec-d/plusdsaison/blob/main/DATA-LICENSE.md"><code>DATA-LICENSE.md</code></a>.
+  </p>
+  <p>Application non officielle. Les erreurs qu'elle contiendrait sont les siennes.</p>
+</footer>
+
+</body>
+</html>
