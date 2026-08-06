@@ -156,6 +156,19 @@ def test_une_altitude_plausible_meme_negative_est_retenue():
     assert communes[0].altitude == -3.2
 
 
+def test_une_falaise_ramenee_sous_terre_est_ecartee():
+    # Talmont-sur-Gironde est perché sur une falaise à ~15 m, mais sa mairie
+    # tombe en bordure de couverture et le service la rend à -269 m. Aucun
+    # point de France n'est à moins de -4 m.
+    communes = [Commune(insee="17437", nom="Talmont", departement="17",
+                        lat=45.5348, lon=-0.9078)]
+    session = FausseSession([{"elevations": [-269.0]}])
+
+    fetch_elevations(session, communes, batch=1, pause=lambda _: None)
+
+    assert communes[0].altitude is None
+
+
 def test_les_altitudes_deja_connues_ne_sont_pas_redemandees(tmp_path):
     # Une reprise après incident ne doit pas refaire les centaines de
     # requêtes déjà abouties.

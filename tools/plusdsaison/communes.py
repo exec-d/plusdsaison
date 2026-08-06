@@ -39,8 +39,14 @@ ELEVATION_NO_DATA = -99999.0
 # ressorties entre -52 000 et -87 000 m. Une altitude de -87 000 m
 # appliquerait une correction de +566 °C à la commune concernée, sans que
 # rien ne le signale. Seules les valeurs physiquement plausibles sont donc
-# retenues — de la mer Morte au sommet des Alpes, avec de la marge.
-ELEVATION_MIN_M = -500.0
+# retenues.
+#
+# La borne basse est serrée à dessein : le point le plus bas de France est à
+# environ -4 m, dans les polders du Nord et le delta du Rhône. Une borne à
+# -500 m laissait encore passer Talmont-sur-Gironde à -269 m — un village
+# perché sur une falaise de l'estuaire, dont la mairie tombe en bordure de
+# couverture. 50 m de marge suffisent largement et rattrapent ce cas.
+ELEVATION_MIN_M = -50.0
 ELEVATION_MAX_M = 5000.0
 
 # Le service reste courtois mais n'est pas sans limite : une courte pause
