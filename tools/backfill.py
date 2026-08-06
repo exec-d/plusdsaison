@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 
+import requests
+
 import cdsapi
 import numpy as np
 import xarray as xr
@@ -144,6 +146,67 @@ def taches_de_telechargement(debut: int, fin: int) -> list[tuple]:
     return taches
 
 
+#: Où lister et annuler les travaux du compte.
+API_TRAVAUX = "https://cds.climate.copernicus.eu/api/retrieve/v1/jobs"
+
+
+def _cle_cds() -> str | None:
+    """La clé lue dans ~/.cdsapirc, ou None si le fichier n'existe pas."""
+    fichier = Path.home() / ".cdsapirc"
+    if not fichier.exists():
+        return None
+    for ligne in fichier.read_text().splitlines():
+        if ligne.startswith("key:"):
+            return ligne.split(":", 1)[1].strip()
+    return None
+
+
+def purger_la_file() -> int:
+    """Annule les travaux restés en attente d'un run précédent.
+
+    **Tuer le client n'annule rien côté serveur.** Un backfill interrompu
+    laisse ses requêtes en file, où elles continuent d'occuper les créneaux de
+    concurrence du compte. Mesuré : quatre travaux orphelins d'un run abandonné
+    ont bloqué trois heures durant les cinq requêtes du run suivant, sans
+    qu'aucun journal local ne le montre — le client attendait poliment des
+    travaux que le serveur ne démarrerait jamais faute de créneau.
+
+    Relancer sans purger aggrave le mal : `cdsapi` soumet une nouvelle requête
+    plutôt que de reprendre l'ancienne, et chaque redémarrage double la file.
+
+    Purger au démarrage plutôt qu'à l'interruption, parce qu'un `kill -9` ne se
+    rattrape pas : à cet instant précis, aucun travail de *ce* processus n'a
+    encore été soumis, donc tout ce qui attend vient forcément d'un run mort.
+
+    Sans clé lisible, on ne purge rien et on le dit : ce nettoyage est un
+    confort, pas une étape dont dépend la correction.
+    """
+    cle = _cle_cds()
+    if cle is None:
+        print("~/.cdsapirc illisible : file non purgée", flush=True)
+        return 0
+
+    entetes = {"PRIVATE-TOKEN": cle}
+    try:
+        reponse = requests.get(f"{API_TRAVAUX}?limit=200", headers=entetes, timeout=30)
+        reponse.raise_for_status()
+        travaux = reponse.json().get("jobs", [])
+    except Exception as erreur:
+        print(f"file non purgée ({erreur})", flush=True)
+        return 0
+
+    orphelins = [t["jobID"] for t in travaux if t.get("status") == "accepted"]
+    annules = 0
+    for identifiant in orphelins:
+        try:
+            r = requests.delete(f"{API_TRAVAUX}/{identifiant}", headers=entetes, timeout=30)
+            if r.status_code == 200:
+                annules += 1
+        except Exception:
+            pass
+    return annules
+
+
 def precharger(taches, cache: Path, parallele: int) -> list[tuple]:
     """Remplit le cache en laissant les attentes se recouvrir.
 
@@ -237,6 +300,10 @@ def main() -> None:
     # L'assemblage relit le cache et ne redemande rien : les deux phases sont
     # séparées pour que l'attente en file — 90 % du temps total — se recouvre
     # au lieu de s'additionner.
+    orphelins = purger_la_file()
+    if orphelins:
+        print(f"{orphelins} travaux d'un run précédent annulés", flush=True)
+
     taches = taches_de_telechargement(args.debut, args.fin)
     print(f"{len(taches)} requêtes CDS, {args.parallele} en vol", flush=True)
     echecs = precharger(taches, args.cache, args.parallele)
