@@ -11,6 +11,7 @@ interruption repart des années manquantes.
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 
@@ -108,6 +109,74 @@ def positions_des_mailles(mailles, n_lon: int) -> tuple[np.ndarray, np.ndarray]:
     )
 
 
+#: Combien de requêtes attendent chez Copernicus en même temps.
+#
+# Ce n'est pas un réglage de performance : c'est le seul qui décide si le
+# backfill dure des jours ou des semaines. Mesuré sur une requête isolée,
+# l'attente en file est de **2 h 53** pour 16 min de calcul — la file est
+# donc 90 % du temps, et elle se recouvre. Six requêtes en vol transforment
+# 304 attentes successives en une cinquantaine d'attentes parallèles.
+#
+# Six et pas cinquante : Copernicus limite le nombre de travaux simultanés
+# par compte, et dépasser cette limite fait refuser les requêtes au lieu de
+# les mettre en attente. Six est prudent ; `--parallele` permet de tenter
+# plus si le compte le supporte.
+PARALLELISME_DEFAUT = 6
+
+
+def taches_de_telechargement(debut: int, fin: int) -> list[tuple]:
+    """Toutes les requêtes CDS d'une période, sans en lancer aucune.
+
+    Séparé du téléchargement pour être vérifiable sans réseau : c'est la
+    liste qui décide du volume, et une erreur de bornes ici coûterait des
+    heures de file avant d'être vue.
+
+    Les précipitations vont jusqu'à `fin + 1` parce que le cumul d'une
+    journée est daté du lendemain : le 31 décembre de la dernière année
+    n'est lisible que dans le fichier de l'année suivante.
+    """
+    taches: list[tuple] = []
+    for annee in range(debut, fin + 1):
+        for variable, statistique in TEMPERATURES:
+            taches.append(("temperature", variable, statistique, annee))
+    for annee in range(debut, fin + 2):
+        taches.append(("precipitation", None, None, annee))
+    return taches
+
+
+def precharger(taches, cache: Path, parallele: int) -> list[tuple]:
+    """Remplit le cache en laissant les attentes se recouvrir.
+
+    Chaque fil porte son propre client : `cdsapi.Client` n'est pas documenté
+    comme sûr en parallèle, et le partager ferait dépendre la correction d'un
+    détail d'implémentation d'une bibliothèque tierce.
+
+    Une tâche qui échoue n'arrête pas les autres — elle est rendue à
+    l'appelant. Perdre cinquante heures de file parce que la trente-septième
+    requête a expiré serait le comportement le plus coûteux possible.
+    """
+    def executer(tache):
+        genre, variable, statistique, annee = tache
+        client = cdsapi.Client()
+        if genre == "temperature":
+            return retrieve_year(client, variable, statistique, annee, cache)
+        return retrieve_precipitation_year(client, annee, cache)
+
+    echecs: list[tuple] = []
+    total = len(taches)
+    with ThreadPoolExecutor(max_workers=parallele) as pool:
+        en_vol = {pool.submit(executer, t): t for t in taches}
+        for termine, futur in enumerate(as_completed(en_vol), start=1):
+            tache = en_vol[futur]
+            try:
+                futur.result()
+                print(f"  [{termine}/{total}] {tache[0]} {tache[3]}", flush=True)
+            except Exception as erreur:
+                echecs.append((tache, erreur))
+                print(f"  [{termine}/{total}] ÉCHEC {tache}: {erreur}", flush=True)
+    return echecs
+
+
 def assembler(
     client, debut: int, fin: int, mailles, cache: Path, premier_jour: int, n_jours: int
 ) -> np.ndarray:
@@ -153,10 +222,34 @@ def main() -> None:
     parseur.add_argument("--to", dest="fin", type=int, required=True)
     parseur.add_argument("--out", required=True, type=Path)
     parseur.add_argument("--cache", type=Path, default=Path(".cache"))
+    parseur.add_argument(
+        "--parallele",
+        type=int,
+        default=PARALLELISME_DEFAUT,
+        help="requêtes CDS simultanées (défaut : %(default)s)",
+    )
     args = parseur.parse_args()
 
     mailles = read_grid_index(args.out / "index" / "grid.bin")
     print(f"{len(mailles)} mailles terrestres à alimenter")
+
+    # Tout télécharger d'abord, en parallèle, puis assembler depuis le cache.
+    # L'assemblage relit le cache et ne redemande rien : les deux phases sont
+    # séparées pour que l'attente en file — 90 % du temps total — se recouvre
+    # au lieu de s'additionner.
+    taches = taches_de_telechargement(args.debut, args.fin)
+    print(f"{len(taches)} requêtes CDS, {args.parallele} en vol", flush=True)
+    echecs = precharger(taches, args.cache, args.parallele)
+    if echecs:
+        # L'année qui suit la période demandée peut légitimement ne pas
+        # exister : son absence ne coûte qu'une journée, marquée absente.
+        bloquants = [t for t, _ in echecs if not (t[0] == "precipitation" and t[3] > args.fin)]
+        if bloquants:
+            raise SystemExit(
+                f"{len(bloquants)} requêtes ont échoué ; le cache garde les "
+                f"autres, relancer la commande reprend là où elle s'est "
+                f"arrêtée.\n" + "\n".join(f"  {t}" for t in bloquants)
+            )
 
     premier_jour = date_to_day(date(args.debut, 1, 1))
     dernier_jour = date_to_day(date(args.fin, 12, 31))
