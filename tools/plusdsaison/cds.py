@@ -63,7 +63,15 @@ _DAYS = [f"{d:02d}" for d in range(1, 32)]
 
 
 def build_request(variable: str, statistic: str, year: int) -> dict:
-    """Requête CDS couvrant une année entière sur l'emprise France."""
+    """Requête CDS couvrant une année entière sur l'emprise France.
+
+    `download_format: unarchived` n'est pas décoratif : sans lui Copernicus est
+    libre de livrer un zip, que `xarray` ne sait pas ouvrir. Les deux autres
+    constructeurs de requête de ce fichier le fixent déjà — celui-ci l'omettait,
+    et c'est le seul des trois dont l'échec coûte cher : une année complète
+    passe des heures en file d'attente avant qu'on découvre le format du
+    fichier reçu.
+    """
     return {
         "variable": [variable],
         "year": str(year),
@@ -74,6 +82,7 @@ def build_request(variable: str, statistic: str, year: int) -> dict:
         "frequency": "1_hourly",
         "area": AREA,
         "data_format": "netcdf",
+        "download_format": "unarchived",
     }
 
 

@@ -170,3 +170,20 @@ def test_une_annee_de_precipitations_deja_en_cache_n_est_pas_retelechargee(tmp_p
     attendu.write_bytes(b"deja la")
 
     assert retrieve_precipitation_year(ClientQuiExplose(), 2023, tmp_path) == attendu
+
+
+def test_les_trois_requetes_refusent_l_archive():
+    """Aucune des trois ne doit laisser Copernicus livrer un zip.
+
+    `xarray` ne sait pas ouvrir une archive, et le constructeur annuel est
+    celui dont l'échec coûte le plus : une année complète passe des heures en
+    file d'attente avant qu'on découvre le format du fichier reçu. Il était le
+    seul des trois à omettre le champ, ce qu'aucun test ne voyait.
+    """
+    requetes = [
+        build_request("2m_temperature", "daily_mean", 2020),
+        build_static_request(),
+        build_precipitation_request(2020),
+    ]
+    for requete in requetes:
+        assert requete["download_format"] == "unarchived", requete
