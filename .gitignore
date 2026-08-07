@@ -3,6 +3,11 @@
 # la donnée publiée, c'est grid/, pas ce qui a servi à la produire.
 tools/.cache/
 
+# L'année en cours, produite localement par daily.py. Elle vit sur la branche
+# orpheline `data-current`, où la CI la force-add ; sur main elle n'a rien à
+# faire — 11 496 fichiers réécrits chaque jour y feraient 2,6 Go par an.
+current/
+
 # Outils
 __pycache__/
 *.pyc

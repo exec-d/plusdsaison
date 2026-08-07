@@ -30,14 +30,21 @@ def main() -> None:
     annee = date.today().year
     mailles = read_grid_index(args.out / "index" / "grid.bin")
 
-    # Le cache du backfill garderait une version périmée de l'année en cours :
-    # on le purge avant de redemander. Les deux motifs comptent — les
-    # précipitations sont mises en cache par année (`_2026.nc`), la température
-    # par trimestre (`_2026_T3.nc`). N'en purger qu'un laisserait l'année en
-    # cours figée au jour de son premier téléchargement, et le tableau de bord
-    # afficherait indéfiniment des chiffres périmés sans le dire.
-    for motif in (f"*_{annee}.nc", f"*_{annee}_T*.nc"):
-        for reste in args.cache.glob(motif):
+    # Le cache garderait une version périmée de l'année en cours : on purge
+    # avant de redemander. Mais seulement ce qui peut encore changer.
+    #
+    # Les trimestres déjà clos de l'année en cours sont définitifs — ERA5-Land
+    # ne réécrit pas janvier en août. Les repurger chaque nuit coûterait
+    # 150 Mo de téléchargement quotidien pour retrouver octet pour octet ce
+    # qu'on avait déjà. Seuls le trimestre en cours et le fichier annuel de
+    # précipitations, tous deux encore en train de se remplir, sont jetés.
+    trimestre_en_cours = (date.today().month - 1) // 3 + 1
+    perimes = [
+        args.cache / f"2m_temperature_hourly_{annee}_T{trimestre_en_cours}.nc",
+        *args.cache.glob(f"*_{annee}.nc"),
+    ]
+    for reste in perimes:
+        if reste.exists():
             reste.unlink()
 
     premier_jour = date_to_day(date(annee, 1, 1))
