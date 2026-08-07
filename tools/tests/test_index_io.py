@@ -90,3 +90,39 @@ def test_une_commune_sans_rattachement_est_refusee(tmp_path):
     incomplete = Commune(insee="1", nom="A", departement="01", lat=46.0, lon=5.0)
     with pytest.raises(ValueError, match="rattachée"):
         write_commune_index(chemin, [incomplete])
+
+
+def test_les_codes_postaux_survivent_a_l_aller_retour(tmp_path):
+    chemin = tmp_path / "communes.bin"
+    write_commune_index(chemin, [
+        # Aucun code : le cas existe, et ne doit pas décaler la suite.
+        Commune(insee="99999", nom="Sans code", departement="99", lat=46.0, lon=5.0,
+                altitude=100.0, cell_id=1, distance_km=1.0),
+        # Un seul, avec un zéro de tête — celui qu'un entier perdrait.
+        Commune(insee="01443", nom="Villars-les-Dombes", departement="01",
+                lat=46.0022, lon=5.0308, altitude=281.0, cell_id=2,
+                distance_km=3.42, codes_postaux=["01330"]),
+        # Plusieurs : la relation n'est bijective dans aucun sens.
+        Commune(insee="75056", nom="Paris", departement="75", lat=48.85, lon=2.35,
+                altitude=35.0, cell_id=3, distance_km=1.0,
+                codes_postaux=["75001", "75002", "75116"]),
+    ])
+    relues = read_commune_index(chemin)
+
+    assert relues[0].codes_postaux == []
+    assert relues[1].codes_postaux == ["01330"]
+    assert relues[2].codes_postaux == ["75001", "75002", "75116"]
+    # Le nom qui suit une entrée à codes multiples se relit intact : c'est ce
+    # qui prouve que le décalage a été repris correctement.
+    assert relues[2].nom == "Paris"
+
+
+def test_un_code_postal_non_conforme_est_refuse(tmp_path):
+    chemin = tmp_path / "communes.bin"
+    # Quatre chiffres au lieu de cinq : accepté, le champ suivant serait lu un
+    # octet trop tôt et tout le reste du fichier partirait de travers.
+    boiteuse = Commune(insee="01443", nom="Villars", departement="01", lat=46.0,
+                       lon=5.0, altitude=281.0, cell_id=1, distance_km=1.0,
+                       codes_postaux=["1330"])
+    with pytest.raises(ValueError, match="code postal invalide"):
+        write_commune_index(chemin, [boiteuse])

@@ -14,7 +14,7 @@ et 1 035,7 m à Chamonix contre 1 041,0.
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -77,6 +77,12 @@ class Commune:
     altitude: float | None = None
     cell_id: int | None = None
     distance_km: float | None = None
+    #: Les codes postaux de la commune, dans l'ordre rendu par geo.api.gouv.fr.
+    #:
+    #: Une liste, parce que la relation n'est bijective ni dans un sens ni dans
+    #: l'autre : Paris en compte vingt, et 01330 en couvre six à lui seul. Elle
+    #: peut être vide — quelques communes n'en ont aucun de publié.
+    codes_postaux: list[str] = field(default_factory=list)
 
 
 def fetch_communes(session) -> list[Commune]:
@@ -89,10 +95,17 @@ def fetch_communes(session) -> list[Commune]:
     commune englobe le mont Blanc, son centroïde tombe à 1 885 m à mi-pente
     quand la ville est à 1 035 m. Les 850 m d'écart valent 5,5 °C de
     correction adiabatique.
+
+    Les codes postaux sont demandés dans la même requête : c'est par eux que
+    les gens cherchent leur commune. Personne ne connaît son code INSEE, et une
+    recherche qui l'exigerait est une recherche que l'on croit vide.
     """
     reponse = session.get(
         GEO_API,
-        params={"fields": "nom,code,codeDepartement,centre,mairie", "format": "json"},
+        params={
+            "fields": "nom,code,codeDepartement,centre,mairie,codesPostaux",
+            "format": "json",
+        },
         timeout=120,
     )
     reponse.raise_for_status()
@@ -114,6 +127,14 @@ def fetch_communes(session) -> list[Commune]:
                 departement=brut["codeDepartement"],
                 lat=float(lat),
                 lon=float(lon),
+                # Filtrés sur cinq chiffres : l'API rend parfois une chaîne
+                # vide, et un code non conforme casserait un format qui
+                # réserve exactement cinq octets par entrée.
+                codes_postaux=[
+                    code
+                    for code in brut.get("codesPostaux") or []
+                    if len(code) == 5 and code.isdigit()
+                ],
             )
         )
     return communes

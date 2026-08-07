@@ -4,6 +4,22 @@
 code Dart : ces formats sont des contrats binaires. Les coordonnées sont
 stockées en entiers au dix-millième de degré (~11 m de précision), les
 altitudes au mètre, les distances de rattachement au décamètre.
+
+Une entrée de `communes.bin` (version 2) :
+
+    5s  code INSEE, ASCII
+    I   identifiant de maille
+    i   latitude × 10 000
+    i   longitude × 10 000
+    h   altitude, en mètres
+    H   distance au centre de la maille × 100
+    B   longueur du nom, en octets
+    …   le nom, en UTF-8
+    B   nombre de codes postaux            ← version 2
+    …   les codes postaux, 5 octets ASCII chacun   ← version 2
+
+Le nom et les codes postaux étant de longueur variable, aucune entrée n'est
+adressable directement : le fichier se lit d'une traite.
 """
 
 import struct
@@ -14,12 +30,30 @@ from .communes import Commune
 
 GRID_MAGIC = b"PDSG"
 COMMUNE_MAGIC = b"PDSC"
-VERSION = 1
+
+#: Deux fichiers, deux formats, deux versions.
+#:
+#: Une constante partagée obligeait à réécrire la grille — qui n'a pas changé
+#: depuis le premier jour et ne changera plus, l'emprise ERA5-Land étant
+#: fixée — chaque fois que le référentiel communal évoluait.
+GRID_VERSION = 1
+COMMUNE_VERSION = 2
 
 _GRID_HEADER = "<4sBI"
 _GRID_CELL = "<Iiih"
 _COMMUNE_HEADER = "<4sBI"
 _COMMUNE_FIXED = "<5sIiihH"
+
+#: Un code postal fait cinq chiffres, stockés en ASCII comme le code INSEE.
+#:
+#: En entier, 01330 s'écrirait 1330 et se relirait faux dans les neuf premiers
+#: départements. Quatre octets gagnés ne valent pas un zéro de tête perdu.
+POSTAL_CODE_BYTES = 5
+
+#: Autant de codes postaux qu'une entrée peut porter.
+#:
+#: Le compte tient sur un octet ; Paris, le maximum observé, en a vingt.
+MAX_POSTAL_CODES = 255
 
 COORD_SCALE = 10_000
 DISTANCE_SCALE = 100
@@ -34,7 +68,7 @@ class GridCell:
 
 
 def write_grid_index(path: Path, cells: list[GridCell]) -> None:
-    morceaux = [struct.pack(_GRID_HEADER, GRID_MAGIC, VERSION, len(cells))]
+    morceaux = [struct.pack(_GRID_HEADER, GRID_MAGIC, GRID_VERSION, len(cells))]
     for maille in cells:
         morceaux.append(
             struct.pack(
@@ -53,7 +87,7 @@ def read_grid_index(path: Path) -> list[GridCell]:
     magic, version, n_cells = struct.unpack_from(_GRID_HEADER, blob)
     if magic != GRID_MAGIC:
         raise ValueError(f"signature inattendue : {magic!r}")
-    if version != VERSION:
+    if version != GRID_VERSION:
         raise ValueError(f"version de format non gérée : {version}")
 
     taille = struct.calcsize(_GRID_CELL)
@@ -74,7 +108,9 @@ def read_grid_index(path: Path) -> list[GridCell]:
 
 
 def write_commune_index(path: Path, communes: list[Commune]) -> None:
-    morceaux = [struct.pack(_COMMUNE_HEADER, COMMUNE_MAGIC, VERSION, len(communes))]
+    morceaux = [
+        struct.pack(_COMMUNE_HEADER, COMMUNE_MAGIC, COMMUNE_VERSION, len(communes))
+    ]
     for commune in communes:
         if commune.cell_id is None or commune.distance_km is None:
             raise ValueError(f"commune {commune.insee} non rattachée à une maille")
@@ -98,6 +134,15 @@ def write_commune_index(path: Path, communes: list[Commune]) -> None:
         )
         morceaux.append(struct.pack("<B", len(nom)))
         morceaux.append(nom)
+
+        codes = commune.codes_postaux[:MAX_POSTAL_CODES]
+        morceaux.append(struct.pack("<B", len(codes)))
+        for code in codes:
+            if len(code) != POSTAL_CODE_BYTES or not code.isdigit():
+                raise ValueError(
+                    f"code postal invalide pour {commune.insee} : {code!r}"
+                )
+            morceaux.append(code.encode("ascii"))
     Path(path).write_bytes(b"".join(morceaux))
 
 
@@ -106,7 +151,7 @@ def read_commune_index(path: Path) -> list[Commune]:
     magic, version, n_communes = struct.unpack_from(_COMMUNE_HEADER, blob)
     if magic != COMMUNE_MAGIC:
         raise ValueError(f"signature inattendue : {magic!r}")
-    if version != VERSION:
+    if version != COMMUNE_VERSION:
         raise ValueError(f"version de format non gérée : {version}")
 
     taille_fixe = struct.calcsize(_COMMUNE_FIXED)
@@ -122,6 +167,15 @@ def read_commune_index(path: Path) -> list[Commune]:
         nom = blob[decalage : decalage + longueur].decode("utf-8")
         decalage += longueur
 
+        (n_codes,) = struct.unpack_from("<B", blob, decalage)
+        decalage += 1
+        codes_postaux = []
+        for _ in range(n_codes):
+            codes_postaux.append(
+                blob[decalage : decalage + POSTAL_CODE_BYTES].decode("ascii")
+            )
+            decalage += POSTAL_CODE_BYTES
+
         code = insee.decode("ascii")
         communes.append(
             Commune(
@@ -133,6 +187,7 @@ def read_commune_index(path: Path) -> list[Commune]:
                 altitude=float(altitude),
                 cell_id=cell_id,
                 distance_km=distance / DISTANCE_SCALE,
+                codes_postaux=codes_postaux,
             )
         )
     return communes

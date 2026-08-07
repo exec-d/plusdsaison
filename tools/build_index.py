@@ -8,6 +8,12 @@ téléchargé depuis Copernicus et mis en cache.
 
     python build_index.py --out .. --cache .cache
     python build_index.py --sample .cache/era5_land_static.nc --out ..
+
+Quand seul le référentiel communal a changé — le cas courant, les communes
+fusionnant tous les ans quand la grille ne bouge jamais — `--reuse-grid`
+repart du `grid.bin` publié et ne touche pas à Copernicus :
+
+    python build_index.py --reuse-grid --out .. --cache .cache
 """
 
 import argparse
@@ -25,8 +31,13 @@ from plusdsaison.communes import (
     fetch_communes,
     fetch_elevations,
 )
-from plusdsaison.grid import cell_id, grid_axes, land_mask
-from plusdsaison.index_io import GridCell, write_commune_index, write_grid_index
+from plusdsaison.grid import cell_id, cell_rowcol, grid_axes, land_mask
+from plusdsaison.index_io import (
+    GridCell,
+    read_grid_index,
+    write_commune_index,
+    write_grid_index,
+)
 
 # Pesanteur normale, celle qu'utilise l'IFS pour passer du géopotentiel de
 # surface (m²/s²) à une altitude en mètres.
@@ -58,57 +69,84 @@ def charger_masque_terre(chemin: Path) -> np.ndarray:
     return land_mask(jeu[nom].squeeze(drop=True).values)
 
 
+def relire_la_grille(chemin: Path, forme: tuple[int, int]):
+    """Les mailles et leur masque, depuis un `grid.bin` déjà publié.
+
+    L'emprise ERA5-Land est figée et l'orographie du modèle ne bouge pas ; le
+    référentiel communal, lui, change tous les ans. Refaire deux requêtes
+    Copernicus pour redécouvrir une grille qu'on a déjà publiée n'apprend rien
+    et occupe une file dont un backfill peut avoir besoin au même moment.
+
+    Le masque se reconstitue exactement : une maille est terrestre si et
+    seulement si elle figure dans le fichier.
+    """
+    mailles = read_grid_index(chemin)
+    masque = np.zeros(forme, dtype=bool)
+    for maille in mailles:
+        ligne, colonne = cell_rowcol(maille.cell_id, forme[1])
+        masque[ligne, colonne] = True
+    return mailles, masque
+
+
 def main() -> None:
     parseur = argparse.ArgumentParser(description=__doc__)
     parseur.add_argument("--sample", type=Path,
                          help="NetCDF ERA5-Land statique ; téléchargé si absent")
     parseur.add_argument("--probe", type=Path,
                          help="NetCDF d'une journée servant de masque terre")
+    parseur.add_argument("--reuse-grid", action="store_true",
+                         help="repartir du grid.bin publié plutôt que de "
+                              "Copernicus ; ne réécrit que communes.bin")
     parseur.add_argument("--out", required=True, type=Path,
                          help="racine du dépôt de données")
     parseur.add_argument("--cache", type=Path, default=Path(".cache"))
     args = parseur.parse_args()
 
-    if args.sample is None or args.probe is None:
-        import cdsapi
-
-        client = cdsapi.Client()
-        if args.sample is None:
-            print("téléchargement de l'échantillon statique…", flush=True)
-            args.sample = retrieve_static(client, args.cache)
-        if args.probe is None:
-            print("téléchargement de la sonde du masque terre…", flush=True)
-            args.probe = retrieve_land_probe(client, args.cache)
-
     lats, lons = grid_axes()
     forme_attendue = (len(lats), len(lons))
 
-    orographie = charger_orographie(args.sample)
-    if orographie.shape != forme_attendue:
-        raise ValueError(
-            f"l'échantillon statique fait {orographie.shape}, "
-            f"la grille attend {forme_attendue}"
+    if args.reuse_grid:
+        mailles, masque = relire_la_grille(
+            args.out / "index" / "grid.bin", forme_attendue
         )
+    else:
+        if args.sample is None or args.probe is None:
+            import cdsapi
 
-    masque = charger_masque_terre(args.probe)
-    if masque.shape != forme_attendue:
-        raise ValueError(
-            f"la sonde fait {masque.shape}, la grille attend {forme_attendue}"
-        )
+            client = cdsapi.Client()
+            if args.sample is None:
+                print("téléchargement de l'échantillon statique…", flush=True)
+                args.sample = retrieve_static(client, args.cache)
+            if args.probe is None:
+                print("téléchargement de la sonde du masque terre…", flush=True)
+                args.probe = retrieve_land_probe(client, args.cache)
 
-    mailles = []
-    for ligne in range(masque.shape[0]):
-        for colonne in range(masque.shape[1]):
-            if not masque[ligne, colonne]:
-                continue
-            mailles.append(
-                GridCell(
-                    cell_id=cell_id(ligne, colonne, len(lons)),
-                    lat=float(lats[ligne]),
-                    lon=float(lons[colonne]),
-                    orography_m=float(orographie[ligne, colonne]),
-                )
+        orographie = charger_orographie(args.sample)
+        if orographie.shape != forme_attendue:
+            raise ValueError(
+                f"l'échantillon statique fait {orographie.shape}, "
+                f"la grille attend {forme_attendue}"
             )
+
+        masque = charger_masque_terre(args.probe)
+        if masque.shape != forme_attendue:
+            raise ValueError(
+                f"la sonde fait {masque.shape}, la grille attend {forme_attendue}"
+            )
+
+        mailles = []
+        for ligne in range(masque.shape[0]):
+            for colonne in range(masque.shape[1]):
+                if not masque[ligne, colonne]:
+                    continue
+                mailles.append(
+                    GridCell(
+                        cell_id=cell_id(ligne, colonne, len(lons)),
+                        lat=float(lats[ligne]),
+                        lon=float(lons[colonne]),
+                        orography_m=float(orographie[ligne, colonne]),
+                    )
+                )
     print(f"{len(mailles)} mailles terrestres retenues")
 
     session = requests.Session()
@@ -145,7 +183,8 @@ def main() -> None:
 
     index = args.out / "index"
     index.mkdir(parents=True, exist_ok=True)
-    write_grid_index(index / "grid.bin", mailles)
+    if not args.reuse_grid:
+        write_grid_index(index / "grid.bin", mailles)
     write_commune_index(index / "communes.bin", communes)
     print(f"index écrit dans {index}")
 
