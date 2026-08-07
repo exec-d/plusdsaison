@@ -11,11 +11,14 @@ from plusdsaison.cds import (
     PRECIPITATION_DATASET,
     PRECIPITATION_DAY_SHIFT,
     PRECIPITATION_FACTOR,
+    QUARTERS,
     STATIC_DATASET,
+    build_hourly_temperature_request,
     build_land_probe_request,
     build_precipitation_request,
     build_request,
     build_static_request,
+    retrieve_hourly_temperature,
     retrieve_land_probe,
     retrieve_precipitation_year,
     retrieve_static,
@@ -23,9 +26,59 @@ from plusdsaison.cds import (
 )
 
 
+def test_la_temperature_vient_du_dataset_horaire():
+    # Le dataset quotidien dérivé livre Tmin/Tmax/Tmoy toutes calculées, pour
+    # un vingt-quatrième du volume — mais sa file met 6 à 16 heures par
+    # requête et n'en sert qu'une à la fois. Reconstruire 1950-2025 y prendrait
+    # des semaines. Le volume est le prix de l'attente évitée.
+    requete = build_hourly_temperature_request(2020, 1)
+    assert requete["variable"] == ["2m_temperature"]
+    assert len(requete["time"]) == 24
+
+
+def test_un_trimestre_par_requete():
+    # Une année entière d'horaire est refusée par Copernicus (« your request
+    # is too large »), un trimestre passe. Mesuré, pas déduit.
+    for trimestre in (1, 2, 3, 4):
+        requete = build_hourly_temperature_request(2020, trimestre)
+        assert len(requete["month"]) == 3
+    assert build_hourly_temperature_request(2020, 1)["month"] == ["01", "02", "03"]
+    assert build_hourly_temperature_request(2020, 4)["month"] == ["10", "11", "12"]
+
+
+def test_les_quatre_trimestres_couvrent_les_douze_mois():
+    # Un mois oublié serait un trou de trente jours dans chaque année, que
+    # rien d'autre ne signalerait.
+    mois = [m for t in (1, 2, 3, 4) for m in QUARTERS[t]]
+    assert sorted(mois) == [f"{m:02d}" for m in range(1, 13)]
+
+
+def test_un_trimestre_deja_en_cache_n_est_pas_retelecharge(tmp_path):
+    class ClientQuiExplose:
+        def retrieve(self, *args, **kwargs):
+            raise AssertionError("le cache aurait dû éviter cet appel")
+
+    attendu = tmp_path / "2m_temperature_hourly_2020_T3.nc"
+    attendu.write_bytes(b"deja la")
+
+    assert retrieve_hourly_temperature(ClientQuiExplose(), 2020, 3, tmp_path) == attendu
+
+
+def test_le_trimestre_horaire_passe_par_le_dataset_rapide(tmp_path):
+    appels = []
+
+    class ClientEnregistreur:
+        def retrieve(self, dataset, requete, cible):
+            appels.append(dataset)
+            Path(cible).write_bytes(b"telecharge")
+
+    retrieve_hourly_temperature(ClientEnregistreur(), 2020, 1, tmp_path)
+    assert appels == [STATIC_DATASET]
+
+
 def test_la_requete_cible_le_dataset_quotidien():
-    # Le dataset horaire imposerait de télécharger 24 fois plus de données
-    # pour les agréger nous-mêmes.
+    # Conservé pour l'orographie et la sonde du masque terre, qui n'ont pas
+    # d'équivalent ailleurs.
     assert DATASET == "derived-era5-land-daily-statistics"
 
 

@@ -101,6 +101,70 @@ def retrieve_year(
     return cible
 
 
+#: Les heures d'une journée complète, pour le dataset horaire.
+_HOURS = [f"{h:02d}:00" for h in range(24)]
+
+#: Les mois de chaque trimestre.
+#:
+#: Le découpage n'est pas esthétique, il est imposé : une année entière
+#: d'horaire dépasse la limite de coût de Copernicus (« your request is too
+#: large »), un trimestre passe. Douze requêtes mensuelles passeraient aussi,
+#: mais coûteraient trois fois plus d'allers-retours pour le même volume.
+QUARTERS = {
+    1: ["01", "02", "03"],
+    2: ["04", "05", "06"],
+    3: ["07", "08", "09"],
+    4: ["10", "11", "12"],
+}
+
+
+def build_hourly_temperature_request(year: int, quarter: int) -> dict:
+    """Un trimestre de température horaire, sur le dataset rapide.
+
+    **Pourquoi l'horaire plutôt que les statistiques quotidiennes déjà
+    calculées.** `derived-era5-land-daily-statistics` livre directement Tmin,
+    Tmax et Tmoy, ce qui divise le volume par 24 — mais sa file d'attente met
+    6 à 16 heures par requête et n'en sert qu'une à la fois. Mesuré sur le
+    compte : cinq requêtes soumises ensemble à 11 h 55 sont revenues à 18 h 27,
+    20 h 36, 23 h 02 et 3 h 39, la cinquième en échec. À trois requêtes par
+    année, reconstruire 1950-2025 y prend des semaines.
+
+    `reanalysis-era5-land` sert la même donnée en quelques minutes — un
+    trimestre mesuré à 4 min 30 pour 52 Mo. On paie en volume (~16 Go pour
+    1950-2025 au lieu d'environ 1) ce qu'on gagne en semaines d'attente.
+
+    L'agrégation locale reproduit le dataset dérivé : vérifié sur le premier
+    trimestre 2024, les 90 journées complètes sont identiques à 0,001 K près.
+    """
+    return {
+        "variable": ["2m_temperature"],
+        "year": str(year),
+        "month": QUARTERS[quarter],
+        "day": _DAYS,
+        "time": _HOURS,
+        "area": AREA,
+        "data_format": "netcdf",
+        "download_format": "unarchived",
+    }
+
+
+def retrieve_hourly_temperature(
+    client, year: int, quarter: int, cache_dir: Path
+) -> Path:
+    """Télécharge un trimestre horaire, ou rend celui déjà en cache."""
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cible = cache_dir / f"2m_temperature_hourly_{year}_T{quarter}.nc"
+
+    if cible.exists() and cible.stat().st_size > 0:
+        return cible
+
+    client.retrieve(
+        STATIC_DATASET, build_hourly_temperature_request(year, quarter), str(cible)
+    )
+    return cible
+
+
 def build_static_request() -> dict:
     """Requête d'une heure sur le dataset horaire, pour l'orographie.
 

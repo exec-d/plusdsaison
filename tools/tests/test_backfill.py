@@ -12,32 +12,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backfill import PARALLELISME_DEFAUT, taches_de_telechargement
 
 
-def test_quatre_series_par_annee():
+def test_quatre_trimestres_et_deux_precipitations_par_annee():
     taches = taches_de_telechargement(2020, 2020)
     temperatures = [t for t in taches if t[0] == "temperature"]
     precipitations = [t for t in taches if t[0] == "precipitation"]
 
-    assert len(temperatures) == 3, "Tmin, Tmax, Tmoy"
+    # Quatre trimestres d'horaire, dont Tmin, Tmax et Tmoy sont ensuite
+    # calculées localement. Une année entière d'un coup dépasse la limite de
+    # coût de Copernicus.
+    assert len(temperatures) == 4
     # Deux et non une : le cumul d'une journée est daté du lendemain, donc le
     # 31 décembre 2020 ne se lit que dans le fichier de 2021.
     assert len(precipitations) == 2
     assert {t[3] for t in precipitations} == {2020, 2021}
 
 
-def test_les_trois_temperatures_sont_distinctes():
-    # Trois requêtes identiques rendraient trois fois la même série, et le
-    # graphe afficherait une courbe plate là où il faut un minimum, une
-    # moyenne et un maximum.
+def test_les_quatre_trimestres_sont_distincts():
+    # Quatre requêtes identiques rendraient quatre fois le même trimestre, et
+    # les trois quarts de l'année seraient absents sans que rien ne le dise.
     taches = taches_de_telechargement(2020, 2020)
-    statistiques = [t[2] for t in taches if t[0] == "temperature"]
-    assert len(set(statistiques)) == 3
+    trimestres = [t[2] for t in taches if t[0] == "temperature"]
+    assert sorted(trimestres) == [1, 2, 3, 4]
 
 
 def test_le_volume_croit_avec_la_periode():
-    assert len(taches_de_telechargement(2020, 2020)) == 5
-    assert len(taches_de_telechargement(2019, 2020)) == 9
-    # 1950-2025 : 76 ans × 3 températures + 77 années de précipitations.
-    assert len(taches_de_telechargement(1950, 2025)) == 76 * 3 + 77
+    assert len(taches_de_telechargement(2020, 2020)) == 6
+    assert len(taches_de_telechargement(2019, 2020)) == 11
+    # 1950-2025 : 76 ans × 4 trimestres + 77 années de précipitations.
+    assert len(taches_de_telechargement(1950, 2025)) == 76 * 4 + 77
 
 
 def test_aucune_tache_en_double():

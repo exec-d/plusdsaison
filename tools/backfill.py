@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Construit l'historique quotidien 1950 → N-1, maille par maille.
 
-Télécharge quatre séries par année (Tmin, Tmax, Tmoy, précipitations),
-les assemble en mémoire puis écrit un fichier binaire par maille terrestre.
+Télécharge par année quatre trimestres de température horaire et deux années
+de précipitations, en calcule les quatre séries quotidiennes (Tmin, Tmax,
+Tmoy, pluie), les assemble en mémoire puis écrit un fichier binaire par maille
+terrestre.
 
 Le téléchargement est reprenable : relancer la commande après une
-interruption repart des années manquantes.
+interruption repart des trimestres manquants.
+
+**Un seul backfill à la fois** — `purger_la_file` annule tout travail en
+attente sur le compte, sans distinguer le sien de celui d'un autre processus.
 
     python backfill.py --from 1950 --to 2025 --out .. --cache .cache
 """
@@ -25,9 +30,9 @@ from plusdsaison.binary import DEFAULT_SCALE, date_to_day, encode_series
 from plusdsaison.cds import (
     PRECIPITATION_DAY_SHIFT,
     PRECIPITATION_FACTOR,
-    STATISTICS,
+    QUARTERS,
+    retrieve_hourly_temperature,
     retrieve_precipitation_year,
-    retrieve_year,
 )
 from plusdsaison.grid import grid_axes
 from plusdsaison.index_io import read_commune_index, read_grid_index
@@ -35,13 +40,11 @@ from plusdsaison.manifest import write_manifest
 from plusdsaison.quantize import MISSING, dequantize, quantize
 
 # L'ordre des colonnes est celui du format publié : Tmin, Tmax, Tmoy, pluie.
-TEMPERATURES = [
-    ("2m_temperature", STATISTICS["min"]),
-    ("2m_temperature", STATISTICS["max"]),
-    ("2m_temperature", STATISTICS["mean"]),
-]
-N_SERIES = len(TEMPERATURES) + 1
-COLONNE_PLUIE = len(TEMPERATURES)
+# Les trois températures sont calculées d'un même fichier horaire, dans cet
+# ordre — voir charger_temperatures.
+N_TEMPERATURES = 3
+N_SERIES = N_TEMPERATURES + 1
+COLONNE_PLUIE = N_TEMPERATURES
 
 KELVIN_OFFSET = 273.15
 
@@ -58,15 +61,53 @@ def _jours_du_fichier(jeu: xr.Dataset) -> np.ndarray:
     return (dates - epoque).astype(np.int64)
 
 
-def charger_temperatures(client, annee: int, cache: Path) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Trois séries (jours, tableau) en degrés Celsius pour l'année."""
+def charger_temperatures(
+    client, annee: int, cache: Path
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Trois séries (jours, tableau) en degrés Celsius pour l'année.
+
+    Les minima, maxima et moyennes sont calculés ici, à partir de l'horaire,
+    et non demandés au dataset dérivé : voir
+    [`build_hourly_temperature_request`][] pour la raison — sa file met des
+    heures là où celle-ci met des minutes.
+
+    **Les journées sont découpées en heure légale française**, comme le fait
+    le dataset dérivé avec `time_zone: utc+01:00`. Sans ce décalage les minima
+    nocturnes glissent d'une heure et le comptage des jours de gel s'en trouve
+    faussé.
+
+    Le décalage prive le 1er janvier de son heure de minuit, restée dans le
+    fichier du quatrième trimestre de l'année précédente. Celui-ci est relu
+    quand il est en cache — c'est le cas de toutes les années sauf la
+    première de l'archive, dont le 1er janvier est donc calculé sur 23 heures.
+    Écart mesuré dans ce cas : 0,28 K au pire.
+    """
+    morceaux = []
+
+    precedent = cache / f"2m_temperature_hourly_{annee - 1}_T4.nc"
+    if precedent.exists() and precedent.stat().st_size > 0:
+        morceaux.append(xr.open_dataset(precedent).isel(valid_time=slice(-1, None)))
+
+    for trimestre in sorted(QUARTERS):
+        chemin = retrieve_hourly_temperature(client, annee, trimestre, cache)
+        morceaux.append(xr.open_dataset(chemin))
+
+    horaire = xr.concat(morceaux, dim="valid_time")
+    nom = list(horaire.data_vars)[0]
+
+    # Le décalage est appliqué à l'axe, pas aux valeurs : grouper ensuite par
+    # date suffit à découper les journées à la bonne frontière.
+    decale = horaire.assign_coords(
+        valid_time=horaire.valid_time + np.timedelta64(1, "h")
+    )
+    groupes = decale[nom].groupby("valid_time.date")
+
     series = []
-    for variable, statistique in TEMPERATURES:
-        chemin = retrieve_year(client, variable, statistique, annee, cache)
-        jeu = xr.open_dataset(chemin)
-        nom = list(jeu.data_vars)[0]
-        valeurs = jeu[nom].values.astype(np.float64) - KELVIN_OFFSET
-        series.append((_jours_du_fichier(jeu), valeurs))
+    for agregat in (groupes.min(), groupes.max(), groupes.mean()):
+        dates = np.asarray(agregat["date"].values, dtype="datetime64[D]")
+        jours = (dates - np.datetime64("1950-01-01", "D")).astype(np.int64)
+        valeurs = agregat.values.astype(np.float64) - KELVIN_OFFSET
+        series.append((jours, valeurs))
     return series
 
 
@@ -139,8 +180,8 @@ def taches_de_telechargement(debut: int, fin: int) -> list[tuple]:
     """
     taches: list[tuple] = []
     for annee in range(debut, fin + 1):
-        for variable, statistique in TEMPERATURES:
-            taches.append(("temperature", variable, statistique, annee))
+        for trimestre in sorted(QUARTERS):
+            taches.append(("temperature", None, trimestre, annee))
     for annee in range(debut, fin + 2):
         taches.append(("precipitation", None, None, annee))
     return taches
@@ -219,10 +260,10 @@ def precharger(taches, cache: Path, parallele: int) -> list[tuple]:
     requête a expiré serait le comportement le plus coûteux possible.
     """
     def executer(tache):
-        genre, variable, statistique, annee = tache
+        genre, _, trimestre, annee = tache
         client = cdsapi.Client()
         if genre == "temperature":
-            return retrieve_year(client, variable, statistique, annee, cache)
+            return retrieve_hourly_temperature(client, annee, trimestre, cache)
         return retrieve_precipitation_year(client, annee, cache)
 
     echecs: list[tuple] = []
