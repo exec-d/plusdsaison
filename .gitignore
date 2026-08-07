@@ -1,0 +1,10 @@
+# Le cache de téléchargement Copernicus. Des NetCDF de 50 Mo par trimestre,
+# reconstructibles par une commande et sans valeur pour qui clone le dépôt :
+# la donnée publiée, c'est grid/, pas ce qui a servi à la produire.
+tools/.cache/
+
+# Outils
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
