@@ -61,6 +61,17 @@ def _jours_du_fichier(jeu: xr.Dataset) -> np.ndarray:
     return (dates - epoque).astype(np.int64)
 
 
+def _trimestre_a_venir(annee: int, trimestre: int, aujourdhui: date | None = None) -> bool:
+    """Le trimestre commence-t-il après aujourd'hui ?
+
+    Le trimestre en cours, lui, est demandé : Copernicus rend les journées
+    qu'il a produites et s'arrête là, ce que `daily.py` sait tronquer.
+    """
+    aujourdhui = aujourdhui or date.today()
+    premier_mois = int(QUARTERS[trimestre][0])
+    return date(annee, premier_mois, 1) > aujourdhui
+
+
 def charger_temperatures(
     client, annee: int, cache: Path
 ) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -89,8 +100,18 @@ def charger_temperatures(
         morceaux.append(xr.open_dataset(precedent).isel(valid_time=slice(-1, None)))
 
     for trimestre in sorted(QUARTERS):
+        if _trimestre_a_venir(annee, trimestre):
+            # Un trimestre qui n'a pas commencé n'existe chez Copernicus sous
+            # aucune forme : le demander est une erreur, pas une absence. Sans
+            # ce filtre, le rafraîchissement quotidien échouerait tous les
+            # jours d'octobre à décembre — au moment précis où l'année en cours
+            # est la plus intéressante.
+            continue
         chemin = retrieve_hourly_temperature(client, annee, trimestre, cache)
         morceaux.append(xr.open_dataset(chemin))
+
+    if not morceaux:
+        raise ValueError(f"aucun trimestre disponible pour {annee}")
 
     horaire = xr.concat(morceaux, dim="valid_time")
     nom = list(horaire.data_vars)[0]

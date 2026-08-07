@@ -30,10 +30,15 @@ def main() -> None:
     annee = date.today().year
     mailles = read_grid_index(args.out / "index" / "grid.bin")
 
-    # Le cache annuel du backfill garderait une version périmée de l'année
-    # en cours : on le purge avant de redemander.
-    for reste in args.cache.glob(f"*_{annee}.nc"):
-        reste.unlink()
+    # Le cache du backfill garderait une version périmée de l'année en cours :
+    # on le purge avant de redemander. Les deux motifs comptent — les
+    # précipitations sont mises en cache par année (`_2026.nc`), la température
+    # par trimestre (`_2026_T3.nc`). N'en purger qu'un laisserait l'année en
+    # cours figée au jour de son premier téléchargement, et le tableau de bord
+    # afficherait indéfiniment des chiffres périmés sans le dire.
+    for motif in (f"*_{annee}.nc", f"*_{annee}_T*.nc"):
+        for reste in args.cache.glob(motif):
+            reste.unlink()
 
     premier_jour = date_to_day(date(annee, 1, 1))
     n_jours = date_to_day(date(annee, 12, 31)) - premier_jour + 1

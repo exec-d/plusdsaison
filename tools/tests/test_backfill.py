@@ -53,3 +53,20 @@ def test_le_parallelisme_par_defaut_reste_prudent():
     # Copernicus refuse les requêtes au-delà d'une limite de travaux
     # simultanés par compte, au lieu de les mettre en attente.
     assert 2 <= PARALLELISME_DEFAUT <= 10
+
+
+def test_un_trimestre_a_venir_n_est_pas_demande():
+    from datetime import date
+
+    from backfill import _trimestre_a_venir
+
+    aout = date(2026, 8, 7)
+    # Passés ou en cours : demandés.
+    assert not _trimestre_a_venir(2026, 1, aout)
+    assert not _trimestre_a_venir(2026, 3, aout), "juillet-septembre a commencé"
+    # À venir : Copernicus rendrait une erreur, pas un fichier vide. Sans ce
+    # filtre le rafraîchissement quotidien casse d'octobre à décembre.
+    assert _trimestre_a_venir(2026, 4, aout)
+    assert _trimestre_a_venir(2027, 1, aout)
+    # Une année entièrement passée reste entièrement demandée.
+    assert not any(_trimestre_a_venir(2025, t, aout) for t in (1, 2, 3, 4))
