@@ -62,8 +62,11 @@ avec.
 ## Données & licence
 
 Données : **ERA5-Land** du Copernicus Climate Change Service, **Météo-France** via
-meteo.data.gouv.fr, et l'**IGN** (ADMIN EXPRESS, RGE ALTI). Le détail des licences et des
-mentions d'attribution obligatoires figure dans [`DATA-LICENSE.md`](DATA-LICENSE.md).
+meteo.data.gouv.fr, **geo.api.gouv.fr** pour le référentiel communal, et l'**IGN** pour les
+altitudes. Le détail des licences et des mentions d'attribution obligatoires figure dans
+[`DATA-LICENSE.md`](DATA-LICENSE.md).
+
+> Contient des données de l'IGN — RGE ALTI®, sous Licence Ouverte 2.0.
 
 > Generated using Copernicus Climate Change Service information 2026.
 
