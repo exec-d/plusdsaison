@@ -61,3 +61,27 @@ def departement_verdict(resultats: list[dict]) -> dict:
         "rmse": rmse,
         "n_stations": len(exploitables),
     }
+
+
+def verdict_line(departement: str, verdict: dict) -> str:
+    """Ligne de journal d'un verdict départemental.
+
+    Un département sans station n'est pas un département hors tolérance :
+    l'un dit que la comparaison n'a pas eu lieu, l'autre que les données sont
+    fausses, et les deux appellent des gestes opposés — corriger la question
+    posée, ou corriger les données. Confondus, ils ont fait lire « biais
+    +nan °C — HORS TOLÉRANCE » pendant six jours à un département dont
+    Météo-France ne publiait rien sous le code demandé.
+    """
+    if verdict["n_stations"] == 0:
+        return (
+            f"département {departement} : "
+            f"{verdict['raison']} — comparaison impossible"
+        )
+
+    stations = "station" if verdict["n_stations"] == 1 else "stations"
+    etat = "OK" if verdict["ok"] else "HORS TOLÉRANCE"
+    return (
+        f"département {departement} : biais {verdict['bias']:+.2f} °C "
+        f"sur {verdict['n_stations']} {stations} — {etat}"
+    )

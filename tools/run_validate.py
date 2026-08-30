@@ -24,7 +24,12 @@ from plusdsaison.binary import date_to_day, decode_series
 from plusdsaison.communes import haversine_km
 from plusdsaison.correction import correct_temperature
 from plusdsaison.index_io import read_grid_index
-from plusdsaison.validate import Station, compare_series, departement_verdict
+from plusdsaison.validate import (
+    Station,
+    compare_series,
+    departement_verdict,
+    verdict_line,
+)
 
 # Jeu « Données climatologiques de base - quotidiennes » de Météo-France,
 # diffusé par département sur data.gouv.fr sous Licence Ouverte 2.0.
@@ -215,8 +220,7 @@ def main() -> None:
         (dossier / f"{departement}.json").write_text(
             json.dumps(verdict, indent=2, ensure_ascii=False) + "\n"
         )
-        etat = "OK" if verdict["ok"] else "HORS TOLÉRANCE"
-        print(f"département {departement} : biais {verdict['bias']:+.2f} °C — {etat}")
+        print(verdict_line(departement, verdict))
         if not verdict["ok"]:
             echecs.append(departement)
 
