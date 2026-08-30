@@ -18,6 +18,7 @@ from plusdsaison.cds import (
     build_precipitation_request,
     build_request,
     build_static_request,
+    make_client,
     retrieve_hourly_temperature,
     retrieve_land_probe,
     retrieve_precipitation_year,
@@ -240,3 +241,19 @@ def test_les_trois_requetes_refusent_l_archive():
     ]
     for requete in requetes:
         assert requete["download_format"] == "unarchived", requete
+
+
+def test_une_erreur_du_serveur_ne_se_rejoue_pas_pendant_des_heures(monkeypatch):
+    # `cdsapi` rejoue par défaut 500 fois à deux minutes d'intervalle, soit
+    # seize heures. Un secret CDSAPI_KEY vide fait répondre 500 au CDS — et
+    # non 401 : vingt-quatre rafraîchissements quotidiens d'affilée ont été
+    # tués à la limite des six heures de GitHub sans rien télécharger, le
+    # journal ne montrant que « Recovering from HTTP error ».
+    import plusdsaison.cds as cds
+
+    recu = {}
+    monkeypatch.setattr(cds.cdsapi, "Client", lambda **kw: recu.update(kw) or object())
+    make_client()
+
+    attente_max_s = recu["retry_max"] * recu["sleep_max"]
+    assert attente_max_s <= 30 * 60, f"{attente_max_s / 3600:.1f} h de rejeux"

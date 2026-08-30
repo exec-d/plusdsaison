@@ -22,7 +22,6 @@ from pathlib import Path
 
 import requests
 
-import cdsapi
 import numpy as np
 import xarray as xr
 
@@ -31,6 +30,7 @@ from plusdsaison.cds import (
     PRECIPITATION_DAY_SHIFT,
     PRECIPITATION_FACTOR,
     QUARTERS,
+    make_client,
     retrieve_hourly_temperature,
     retrieve_precipitation_year,
 )
@@ -282,7 +282,7 @@ def precharger(taches, cache: Path, parallele: int) -> list[tuple]:
     """
     def executer(tache):
         genre, _, trimestre, annee = tache
-        client = cdsapi.Client()
+        client = make_client()
         if genre == "temperature":
             return retrieve_hourly_temperature(client, annee, trimestre, cache)
         return retrieve_precipitation_year(client, annee, cache)
@@ -385,7 +385,7 @@ def main() -> None:
     n_jours = dernier_jour - premier_jour + 1
 
     accumulateur = assembler(
-        cdsapi.Client(), args.debut, args.fin, mailles, args.cache,
+        make_client(), args.debut, args.fin, mailles, args.cache,
         premier_jour, n_jours,
     )
 

@@ -23,7 +23,7 @@ import numpy as np
 import requests
 import xarray as xr
 
-from plusdsaison.cds import retrieve_land_probe, retrieve_static
+from plusdsaison.cds import make_client, retrieve_land_probe, retrieve_static
 from plusdsaison.communes import (
     ELEVATION_BATCH,
     MAX_DISTANCE_KM,
@@ -111,9 +111,7 @@ def main() -> None:
         )
     else:
         if args.sample is None or args.probe is None:
-            import cdsapi
-
-            client = cdsapi.Client()
+            client = make_client()
             if args.sample is None:
                 print("téléchargement de l'échantillon statique…", flush=True)
                 args.sample = retrieve_static(client, args.cache)

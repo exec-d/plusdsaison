@@ -20,6 +20,10 @@ concurrency:
 jobs:
   rafraichir:
     runs-on: ubuntu-latest
+    # Mesuré : trois trimestres horaires et le fichier de pluie tiennent en
+    # une vingtaine de minutes. Au-delà d'une heure et demie, quelque chose
+    # ne va pas, et « échoué » se lit mieux que six heures de « annulé ».
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -35,10 +39,19 @@ jobs:
 
       # La clé passe par l'environnement plutôt que par une interpolation
       # dans le script : elle ne peut ainsi pas être interprétée par le shell.
+      # Un jeton vide ne se voit pas : le CDS répond 500 — et non 401 —, et
+      # `cdsapi` prend ce 500 pour une panne passagère. Faute de ce contrôle,
+      # vingt-quatre rafraîchissements d'affilée ont été tués à la limite des
+      # six heures de GitHub sans jamais rien télécharger, le journal ne
+      # montrant que « Recovering from HTTP error ».
       - name: Identifiants Copernicus
         env:
           CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
         run: |
+          if [ -z "$CDSAPI_KEY" ]; then
+            echo "::error::Le secret CDSAPI_KEY est vide ou absent du dépôt."
+            exit 1
+          fi
           umask 077
           printf 'url: https://cds.climate.copernicus.eu/api\nkey: %s\n' \
             "$CDSAPI_KEY" > ~/.cdsapirc

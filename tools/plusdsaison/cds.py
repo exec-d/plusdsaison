@@ -11,6 +11,8 @@ une année déjà téléchargée n'est jamais redemandée.
 
 from pathlib import Path
 
+import cdsapi
+
 from .grid import LAT_MAX, LAT_MIN, LON_MAX, LON_MIN
 
 DATASET = "derived-era5-land-daily-statistics"
@@ -264,3 +266,36 @@ def retrieve_precipitation_year(client, year: int, cache_dir: Path) -> Path:
 
     client.retrieve(PRECIPITATION_DATASET, build_precipitation_request(year), str(cible))
     return cible
+
+
+# Rejeux d'une erreur HTTP avant d'abandonner, et attente entre deux.
+#
+# `cdsapi` en tente 500 à deux minutes d'intervalle, soit seize heures
+# pendant lesquelles le journal n'écrit que « Recovering from HTTP error ».
+# Ce n'est pas une hypothèse : un secret `CDSAPI_KEY` vide fait répondre 500
+# au CDS — et non 401, qui aurait interrompu tout de suite —, et le
+# rafraîchissement quotidien s'est fait tuer à la limite des six heures de
+# GitHub vingt-quatre jours d'affilée sans jamais rien télécharger.
+#
+# Dix minutes absorbent une panne passagère ; au-delà, la panne est
+# installée et attendre ne la résout pas.
+RETRY_MAX = 5
+SLEEP_MAX_S = 120
+
+
+def make_client(**extra):
+    """Client CDS dont les rejeux sont bornés à dix minutes.
+
+    Passer par ici plutôt que par `cdsapi.Client()` : c'est le seul endroit
+    où la borne est écrite.
+
+    **L'attente en file n'est pas raccourcie.** `retry_max` ne borne que deux
+    boucles — les rejeux d'une erreur HTTP, qui dorment exactement `sleep_max`
+    entre deux, et les reprises d'un téléchargement interrompu. Le sondage
+    d'un travail en attente est une boucle distincte, sans compteur, dont
+    `sleep_max` ne plafonne que l'intervalle. Un backfill peut donc toujours
+    passer des heures en file. Vérifié dans `cdsapi/api.py` 0.7.4.
+    """
+    reglages = {"retry_max": RETRY_MAX, "sleep_max": SLEEP_MAX_S}
+    reglages.update(extra)
+    return cdsapi.Client(**reglages)

@@ -12,11 +12,11 @@ import argparse
 from datetime import date
 from pathlib import Path
 
-import cdsapi
 import numpy as np
 
 from backfill import assembler
 from plusdsaison.binary import DEFAULT_SCALE, date_to_day, encode_series
+from plusdsaison.cds import make_client
 from plusdsaison.index_io import read_grid_index
 from plusdsaison.quantize import MISSING, dequantize
 
@@ -51,7 +51,7 @@ def main() -> None:
     n_jours = date_to_day(date(annee, 12, 31)) - premier_jour + 1
 
     accumulateur = assembler(
-        cdsapi.Client(), annee, annee, mailles, args.cache, premier_jour, n_jours
+        make_client(), annee, annee, mailles, args.cache, premier_jour, n_jours
     )
 
     # Dernier jour où au moins une maille porte une température : au-delà,
