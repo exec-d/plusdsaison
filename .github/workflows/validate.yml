@@ -34,10 +34,15 @@ jobs:
       # Quatre départements couvrant plaine, littoral, montagne et Corse :
       # c'est là que les erreurs de rattachement et de correction
       # altitudinale se voient en premier.
+      #
+      # La Corse est « 20 » et non « 2A » : Météo-France diffuse ce jeu sous
+      # le code d'avant la partition de 1976. Demander « 2A » ne renvoie
+      # aucune ressource, donc aucune station, et faisait échouer toute la
+      # validation — les trois autres départements compris.
       - name: Valider
         run: |
           cd tools && python run_validate.py --out .. \
-            --dept 01 --dept 29 --dept 74 --dept 2A
+            --dept 01 --dept 29 --dept 74 --dept 20
 
       - name: Publier les écarts
         run: |

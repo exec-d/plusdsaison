@@ -28,7 +28,7 @@ APK signé est publié ici, en Release.
   réécrite chaque jour en force. Orpheline précisément pour cela : republier 11 500 fichiers par
   jour sur `main` en ferait un dépôt de plusieurs gigaoctets en un an.
 - **`validation/{dept}.json`** — l'écart mesuré entre nos données et les stations Météo-France,
-  sur quatre départements témoins (01, 29, 74, 2A) choisis pour couvrir montagne, littoral et
+  sur quatre départements témoins (01, 29, 74, 20) choisis pour couvrir montagne, littoral et
   Méditerranée.
 - **`manifest.json`** — la couverture publiée : nombre de mailles, de communes, premier et
   dernier jour. C'est ce que l'application lit en premier.
