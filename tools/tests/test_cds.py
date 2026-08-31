@@ -257,3 +257,33 @@ def test_une_erreur_du_serveur_ne_se_rejoue_pas_pendant_des_heures(monkeypatch):
 
     attente_max_s = recu["retry_max"] * recu["sleep_max"]
     assert attente_max_s <= 30 * 60, f"{attente_max_s / 3600:.1f} h de rejeux"
+
+
+def test_un_telechargement_coupe_ne_laisse_pas_de_cache(tmp_path):
+    # `cdsapi` écrit ses morceaux directement dans la cible, et le cache ne
+    # regarde que la taille : un fichier partiel serait resservi tel quel.
+    # Mesuré : un NetCDF tronqué est refusé à l'ouverture (« NetCDF: HDF
+    # error »), donc rien de faux n'est publié — mais l'assemblage s'arrête
+    # après des heures de téléchargement, sur un fichier qu'il faut aller
+    # supprimer soi-même pour relancer.
+    class ClientCoupe:
+        def retrieve(self, dataset, requete, cible):
+            Path(cible).write_bytes(b"la moitie du fichier")
+            raise RuntimeError("connexion coupée")
+
+    with pytest.raises(RuntimeError):
+        retrieve_hourly_temperature(ClientCoupe(), 2020, 1, tmp_path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_un_telechargement_abouti_arrive_sous_son_nom_definitif(tmp_path):
+    class ClientEnregistreur:
+        def retrieve(self, dataset, requete, cible):
+            Path(cible).write_bytes(b"telecharge")
+
+    obtenu = retrieve_precipitation_year(ClientEnregistreur(), 2020, tmp_path)
+
+    assert obtenu == tmp_path / "total_precipitation_2020.nc"
+    assert obtenu.read_bytes() == b"telecharge"
+    assert [c.name for c in tmp_path.iterdir()] == ["total_precipitation_2020.nc"]

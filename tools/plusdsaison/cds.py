@@ -88,6 +88,27 @@ def build_request(variable: str, statistic: str, year: int) -> dict:
     }
 
 
+def _telecharger(client, dataset: str, requete: dict, cible: Path) -> Path:
+    """Télécharge sous un nom provisoire, puis renomme.
+
+    `cdsapi` écrit ses morceaux directement dans la cible, et le cache ne
+    regarde que la taille : une coupure y laisse un fichier partiel que la
+    relance resservirait tel quel. Mesuré sur un fichier tronqué à 30 Mo sur
+    54 : `xarray` le refuse à l'ouverture (« NetCDF: HDF error »), donc rien
+    de faux n'est publié — mais l'assemblage s'arrête après des heures de
+    téléchargement, en nommant un fichier qu'il faut aller supprimer soi-même.
+    Le renommage rend la reprise automatique.
+    """
+    partiel = cible.with_name(cible.name + ".partiel")
+    partiel.unlink(missing_ok=True)
+    try:
+        client.retrieve(dataset, requete, str(partiel))
+        partiel.replace(cible)
+    finally:
+        partiel.unlink(missing_ok=True)
+    return cible
+
+
 def retrieve_year(
     client, variable: str, statistic: str, year: int, cache_dir: Path
 ) -> Path:
@@ -99,8 +120,7 @@ def retrieve_year(
     if cible.exists() and cible.stat().st_size > 0:
         return cible
 
-    client.retrieve(DATASET, build_request(variable, statistic, year), str(cible))
-    return cible
+    return _telecharger(client, DATASET, build_request(variable, statistic, year), cible)
 
 
 #: Les heures d'une journée complète, pour le dataset horaire.
@@ -161,10 +181,9 @@ def retrieve_hourly_temperature(
     if cible.exists() and cible.stat().st_size > 0:
         return cible
 
-    client.retrieve(
-        STATIC_DATASET, build_hourly_temperature_request(year, quarter), str(cible)
+    return _telecharger(
+        client, STATIC_DATASET, build_hourly_temperature_request(year, quarter), cible
     )
-    return cible
 
 
 def build_static_request() -> dict:
@@ -200,8 +219,7 @@ def retrieve_static(client, cache_dir: Path) -> Path:
     if cible.exists() and cible.stat().st_size > 0:
         return cible
 
-    client.retrieve(STATIC_DATASET, build_static_request(), str(cible))
-    return cible
+    return _telecharger(client, STATIC_DATASET, build_static_request(), cible)
 
 
 def build_land_probe_request() -> dict:
@@ -232,8 +250,7 @@ def retrieve_land_probe(client, cache_dir: Path) -> Path:
     if cible.exists() and cible.stat().st_size > 0:
         return cible
 
-    client.retrieve(DATASET, build_land_probe_request(), str(cible))
-    return cible
+    return _telecharger(client, DATASET, build_land_probe_request(), cible)
 
 
 def build_precipitation_request(year: int) -> dict:
@@ -264,8 +281,9 @@ def retrieve_precipitation_year(client, year: int, cache_dir: Path) -> Path:
     if cible.exists() and cible.stat().st_size > 0:
         return cible
 
-    client.retrieve(PRECIPITATION_DATASET, build_precipitation_request(year), str(cible))
-    return cible
+    return _telecharger(
+        client, PRECIPITATION_DATASET, build_precipitation_request(year), cible
+    )
 
 
 # Rejeux d'une erreur HTTP avant d'abandonner, et attente entre deux.
