@@ -1,6 +1,6 @@
 # PlusD'Saison
 
-**Comment le climat de votre commune évolue depuis 1950.**
+**Comment le climat de votre commune évolue depuis 1991.**
 
 Ce n'est pas une application de météo : elle ne dit pas le temps qu'il fera demain. Elle regarde
 en arrière — *cette année est-elle plus chaude que la précédente ?*, *à quoi ressemble un hiver
@@ -22,7 +22,7 @@ APK signé est publié ici, en Release.
   grille, avec code INSEE, coordonnées et altitude. Embarqué comme asset dans l'application.
 - **`index/grid.bin`** — les mailles ERA5-Land couvrant la France, avec l'orographie du modèle.
   Embarqué lui aussi : la correction altitudinale en dépend.
-- **`grid/{maille}/history.bin`** — l'historique quotidien 1950 → N-1 d'une maille : température
+- **`grid/{maille}/history.bin`** — l'historique quotidien 1991 → N-1 d'une maille : température
   minimale, maximale, moyenne et précipitations, quantifiées en entiers 16 bits. ~118 Ko.
 - **`current/{maille}.bin`** — l'année en cours, sur la branche orpheline `data-current`,
   réécrite chaque jour en force. Orpheline précisément pour cela : republier 11 500 fichiers par
